@@ -1,0 +1,8 @@
+# Core dependencies
+# Note: opencv-python and picamera2 are installed at system level on Raspberry Pi OS
+# Use --system-site-packages when creating the venv
+
+flask>=3.0
+Pillow>=10.0
+scikit-image>=0.21
+tflite-runtime>=2.14  # Optional: only if using TFLite models
