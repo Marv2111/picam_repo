@@ -114,6 +114,9 @@ class Pipeline:
                     'score': r['score'],
                     'defects': r['defects'],
                     'details': r['details'],
+                    'method': r.get('method', ''),
+                    'raw_ocr': r.get('raw_ocr', ''),
+                    'card_number': r.get('card_number', ''),
                 })
 
             with self._lock:
@@ -162,6 +165,9 @@ class Pipeline:
                 'score': grade_result['score'],
                 'defects': grade_result['defects'],
                 'details': grade_result['details'],
+                'method': id_result.get('method', ''),
+                'raw_ocr': id_result.get('raw_ocr', ''),
+                'card_number': id_result.get('card_number', ''),
             })
 
         return detections, card_results

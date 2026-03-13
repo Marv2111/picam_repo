@@ -75,6 +75,8 @@ class Camera:
             try:
                 if self.use_picamera:
                     frame = self._camera.capture_array()
+                    # No color conversion needed — Debian Trixie already
+                    # provides frames in the correct format for OpenCV
                 else:
                     ret, frame = self._camera.read()
                     if not ret:

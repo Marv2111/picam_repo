@@ -1,216 +1,156 @@
 """
-Pokémon identification module — CNN-based.
-Uses MobileNetV2 (via OpenCV DNN) as a feature extractor to create
-"fingerprints" of Pokémon artwork, then matches cards against the database
-using cosine similarity.
+Pokémon identification module — OCR-based.
+Reads the Pokémon name printed on the card using Tesseract OCR,
+then fuzzy-matches it against a list of all known Pokémon names.
 
-Much more accurate than color histograms because the CNN captures shapes,
-patterns, and semantic features — not just colors.
+This is far more accurate than image matching because every Pokémon card
+has the name clearly printed at the top.
 
-Fallback: If the ONNX model isn't available, uses an improved multi-feature
-matching approach (histogram + Hu moments + edge features).
+Fallback: If OCR fails, uses CNN feature matching against sprites.
 """
 
 import os
 import json
 import pickle
+import re
 import cv2
 import numpy as np
+
+try:
+    import pytesseract
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
+
 import config
+
+# All 151 Gen 1 Pokémon names for fuzzy matching
+# Extend this list for more generations
+POKEMON_NAMES = [
+    "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
+    "Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie",
+    "Metapod", "Butterfree", "Weedle", "Kakuna", "Beedrill",
+    "Pidgey", "Pidgeotto", "Pidgeot", "Rattata", "Raticate",
+    "Spearow", "Fearow", "Ekans", "Arbok", "Pikachu",
+    "Raichu", "Sandshrew", "Sandslash", "Nidoran", "Nidorina",
+    "Nidoqueen", "Nidorino", "Nidoking", "Clefairy", "Clefable",
+    "Vulpix", "Ninetales", "Jigglypuff", "Wigglytuff", "Zubat",
+    "Golbat", "Oddish", "Gloom", "Vileplume", "Paras",
+    "Parasect", "Venonat", "Venomoth", "Diglett", "Dugtrio",
+    "Meowth", "Persian", "Psyduck", "Golduck", "Mankey",
+    "Primeape", "Growlithe", "Arcanine", "Poliwag", "Poliwhirl",
+    "Poliwrath", "Abra", "Kadabra", "Alakazam", "Machop",
+    "Machoke", "Machamp", "Bellsprout", "Weepinbell", "Victreebel",
+    "Tentacool", "Tentacruel", "Geodude", "Graveler", "Golem",
+    "Ponyta", "Rapidash", "Slowpoke", "Slowbro", "Magnemite",
+    "Magneton", "Farfetchd", "Doduo", "Dodrio", "Seel",
+    "Dewgong", "Grimer", "Muk", "Shellder", "Cloyster",
+    "Gastly", "Haunter", "Gengar", "Onix", "Drowzee",
+    "Hypno", "Krabby", "Kingler", "Voltorb", "Electrode",
+    "Exeggcute", "Exeggutor", "Cubone", "Marowak", "Hitmonlee",
+    "Hitmonchan", "Lickitung", "Koffing", "Weezing", "Rhyhorn",
+    "Rhydon", "Chansey", "Tangela", "Kangaskhan", "Horsea",
+    "Seadra", "Goldeen", "Seaking", "Staryu", "Starmie",
+    "Mr. Mime", "Scyther", "Jynx", "Electabuzz", "Magmar",
+    "Pinsir", "Tauros", "Magikarp", "Gyarados", "Lapras",
+    "Ditto", "Eevee", "Vaporeon", "Jolteon", "Flareon",
+    "Porygon", "Omanyte", "Omastar", "Kabuto", "Kabutops",
+    "Aerodactyl", "Snorlax", "Articuno", "Zapdos", "Moltres",
+    "Dratini", "Dragonair", "Dragonite", "Mewtwo", "Mew",
+    # Gen 2
+    "Chikorita", "Bayleef", "Meganium", "Cyndaquil", "Quilava",
+    "Typhlosion", "Totodile", "Croconaw", "Feraligatr", "Sentret",
+    "Furret", "Hoothoot", "Noctowl", "Ledyba", "Ledian",
+    "Spinarak", "Ariados", "Crobat", "Chinchou", "Lanturn",
+    "Pichu", "Cleffa", "Igglybuff", "Togepi", "Togetic",
+    "Natu", "Xatu", "Mareep", "Flaaffy", "Ampharos",
+    "Bellossom", "Marill", "Azumarill", "Sudowoodo", "Politoed",
+    "Hoppip", "Skiploom", "Jumpluff", "Aipom", "Sunkern",
+    "Sunflora", "Yanma", "Wooper", "Quagsire", "Espeon",
+    "Umbreon", "Murkrow", "Slowking", "Misdreavus", "Unown",
+    "Wobbuffet", "Girafarig", "Pineco", "Forretress", "Dunsparce",
+    "Gligar", "Steelix", "Snubbull", "Granbull", "Qwilfish",
+    "Scizor", "Shuckle", "Heracross", "Sneasel", "Teddiursa",
+    "Ursaring", "Slugma", "Magcargo", "Swinub", "Piloswine",
+    "Corsola", "Remoraid", "Octillery", "Delibird", "Mantine",
+    "Skarmory", "Houndour", "Houndoom", "Kingdra", "Phanpy",
+    "Donphan", "Porygon2", "Stantler", "Smeargle", "Tyrogue",
+    "Hitmontop", "Smoochum", "Elekid", "Magby", "Miltank",
+    "Blissey", "Raikou", "Entei", "Suicune", "Larvitar",
+    "Pupitar", "Tyranitar", "Lugia", "Ho-Oh", "Celebi",
+    # Common card suffixes/prefixes to handle
+    # (these help match "Pikachu V", "Charizard EX", "Mewtwo GX" etc.)
+]
+
+# Common suffixes on modern cards
+CARD_SUFFIXES = ["EX", "GX", "V", "VMAX", "VSTAR", "ex", "LV.X",
+                 "BREAK", "LEGEND", "Lv.X", "Star", "δ"]
 
 
 class CardIdentifier:
-    """Identify which Pokémon is on a card using CNN feature matching."""
+    """Identify Pokémon cards using OCR to read the name."""
 
     def __init__(self, db_path=None, ref_dir=None, model_path=None):
         self.db_path = db_path or config.REFERENCE_DB_PATH
         self.ref_dir = ref_dir or config.REFERENCE_CARDS_DIR
-        self.model_path = model_path or os.path.join("models", "mobilenetv2-12.onnx")
+
+        # Build lowercase lookup for fuzzy matching
+        self.pokemon_lookup = {}
+        for name in POKEMON_NAMES:
+            self.pokemon_lookup[name.lower()] = name
+            # Also index without special characters
+            clean = re.sub(r'[^a-z]', '', name.lower())
+            self.pokemon_lookup[clean] = name
+
+        # CNN fallback
         self.net = None
         self.use_cnn = False
         self.database = {}
-        self.name_map = {}
-
-        self._load_model()
-        self._load_name_map()
-        self._load_database()
-
-    def _load_model(self):
-        """Load the MobileNetV2 ONNX model for feature extraction."""
-        if os.path.exists(self.model_path):
+        model_path = model_path or os.path.join("models", "mobilenetv2-12.onnx")
+        if os.path.exists(model_path):
             try:
-                self.net = cv2.dnn.readNetFromONNX(self.model_path)
+                self.net = cv2.dnn.readNetFromONNX(model_path)
                 self.use_cnn = True
-                print(f"[Identifier] Loaded MobileNetV2 CNN model")
-            except Exception as e:
-                print(f"[Identifier] Failed to load ONNX model: {e}")
-                print(f"[Identifier] Falling back to multi-feature matching")
-        else:
-            print(f"[Identifier] No CNN model found at '{self.model_path}'")
-            print(f"[Identifier] Run: python3 tools/download_model.py")
-            print(f"[Identifier] Using fallback multi-feature matching")
+            except Exception:
+                pass
 
-    def _load_name_map(self):
-        """Load the Pokémon name mapping file if available."""
+        self.name_map = {}
         map_path = os.path.join(self.ref_dir, "_name_map.json")
         if os.path.exists(map_path):
             with open(map_path, "r") as f:
                 self.name_map = json.load(f)
 
+        self._load_database()
+
+        if TESSERACT_AVAILABLE:
+            print("[Identifier] OCR mode (Tesseract) — best accuracy")
+        else:
+            print("[Identifier] WARNING: pytesseract not installed!")
+            print("  Install with: sudo apt install tesseract-ocr && pip install pytesseract")
+            if self.use_cnn:
+                print("[Identifier] Falling back to CNN matching")
+            else:
+                print("[Identifier] No identification method available!")
+
     def _load_database(self):
-        """Load pre-computed feature database, or build if missing."""
+        """Load CNN feature database if available."""
         if os.path.exists(self.db_path):
             with open(self.db_path, "rb") as f:
                 self.database = pickle.load(f)
-            # Check if database matches current mode (CNN vs fallback)
-            sample = next(iter(self.database.values()), {})
-            db_has_cnn = "cnn_features" in sample
-            if self.use_cnn and not db_has_cnn:
-                print("[Identifier] Database was built without CNN. Rebuilding...")
-                self.build_database()
-            elif not self.use_cnn and db_has_cnn:
-                print("[Identifier] Database was built with CNN but model not loaded. Rebuilding...")
-                self.build_database()
-            else:
-                print(f"[Identifier] Loaded {len(self.database)} Pokémon "
-                      f"({'CNN' if self.use_cnn else 'fallback'} mode)")
-        elif os.path.isdir(self.ref_dir):
-            exts = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-            has_images = any(f.lower().endswith(exts) and not f.startswith("_")
-                            for f in os.listdir(self.ref_dir))
-            if has_images:
-                print("[Identifier] No database found. Building...")
-                self.build_database()
-            else:
-                print("[Identifier] No sprites found. Run:")
-                print("  python3 tools/download_pokemon_sprites.py")
-        else:
-            print("[Identifier] No reference directory found.")
+            print(f"[Identifier] Loaded {len(self.database)} sprites for fallback")
 
-    # ------------------------------------------------------------------
-    # CNN Feature Extraction
-    # ------------------------------------------------------------------
-    def _extract_cnn_features(self, image):
-        """
-        Extract a feature vector from an image using MobileNetV2.
-        Returns a normalized 1000-dim vector (ImageNet logits as fingerprint).
-        """
-        # MobileNetV2 expects 224x224 input, normalized
-        blob = cv2.dnn.blobFromImage(
-            image,
-            scalefactor=1.0 / 255.0,
-            size=(224, 224),
-            mean=(0.485, 0.456, 0.406),  # ImageNet mean
-            swapRB=False,  # Our images are already BGR from OpenCV
-            crop=False
-        )
-        # Apply ImageNet std normalization
-        # blob shape: (1, 3, 224, 224)
-        blob[0, 0] /= 0.229
-        blob[0, 1] /= 0.224
-        blob[0, 2] /= 0.225
-
-        self.net.setInput(blob)
-        output = self.net.forward()  # Shape: (1, 1000)
-        features = output.flatten()
-
-        # L2 normalize for cosine similarity
-        norm = np.linalg.norm(features)
-        if norm > 0:
-            features = features / norm
-
-        return features
-
-    # ------------------------------------------------------------------
-    # Fallback Feature Extraction (no CNN)
-    # ------------------------------------------------------------------
-    def _extract_fallback_features(self, image):
-        """
-        Extract multiple feature types for matching without a CNN.
-        Returns a dict of feature arrays.
-        """
-        img = cv2.resize(image, (200, 200))
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        # 1. HSV color histogram (more bins for better discrimination)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        hist_h = cv2.calcHist([hsv], [0], None, [60], [0, 180])
-        hist_s = cv2.calcHist([hsv], [1], None, [48], [0, 256])
-        hist_v = cv2.calcHist([hsv], [2], None, [48], [0, 256])
-        cv2.normalize(hist_h, hist_h)
-        cv2.normalize(hist_s, hist_s)
-        cv2.normalize(hist_v, hist_v)
-
-        # 2. Lab color histogram (perceptually uniform color space)
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
-        hist_a = cv2.calcHist([lab], [1], None, [48], [0, 256])
-        hist_b = cv2.calcHist([lab], [2], None, [48], [0, 256])
-        cv2.normalize(hist_a, hist_a)
-        cv2.normalize(hist_b, hist_b)
-
-        # 3. Hu moments (shape-based, rotation/scale invariant)
-        moments = cv2.moments(gray)
-        hu = cv2.HuMoments(moments).flatten()
-        # Log transform for better comparison (Hu moments span huge ranges)
-        hu = -np.sign(hu) * np.log10(np.abs(hu) + 1e-10)
-
-        # 4. Edge orientation histogram
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        magnitude = np.sqrt(sobelx**2 + sobely**2)
-        angle = np.arctan2(sobely, sobelx) * 180 / np.pi + 180  # 0-360
-        # Only count strong edges
-        mask = magnitude > np.percentile(magnitude, 70)
-        edge_hist, _ = np.histogram(angle[mask], bins=36, range=(0, 360))
-        edge_hist = edge_hist.astype(np.float32)
-        edge_norm = np.linalg.norm(edge_hist)
-        if edge_norm > 0:
-            edge_hist /= edge_norm
-
-        # 5. Spatial color layout (divide into 4x4 grid, get mean color)
-        grid_features = []
-        gh, gw = img.shape[0] // 4, img.shape[1] // 4
-        for gy in range(4):
-            for gx in range(4):
-                cell = hsv[gy*gh:(gy+1)*gh, gx*gw:(gx+1)*gw]
-                grid_features.extend(cell.mean(axis=(0, 1)).tolist())
-        grid_features = np.array(grid_features, dtype=np.float32)
-        grid_norm = np.linalg.norm(grid_features)
-        if grid_norm > 0:
-            grid_features /= grid_norm
-
-        return {
-            "hist_h": hist_h.flatten(),
-            "hist_s": hist_s.flatten(),
-            "hist_v": hist_v.flatten(),
-            "hist_a": hist_a.flatten(),
-            "hist_b": hist_b.flatten(),
-            "hu_moments": hu,
-            "edge_hist": edge_hist,
-            "color_grid": grid_features,
-        }
-
-    # ------------------------------------------------------------------
-    # Database Building
-    # ------------------------------------------------------------------
     def build_database(self):
-        """Build the reference database from sprite images."""
-        if not os.path.isdir(self.ref_dir):
-            os.makedirs(self.ref_dir, exist_ok=True)
+        """Build CNN feature database from sprites (for fallback matching)."""
+        if not self.use_cnn or not os.path.isdir(self.ref_dir):
+            print("[Identifier] Skipping CNN database (no model or no sprites)")
             return
 
         self.database = {}
         extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
-
         filenames = sorted([f for f in os.listdir(self.ref_dir)
                            if f.lower().endswith(extensions) and not f.startswith("_")])
 
-        if not filenames:
-            print("[Identifier] No sprite images found.")
-            return
-
-        print(f"[Identifier] Processing {len(filenames)} sprites "
-              f"({'CNN' if self.use_cnn else 'fallback'} mode)...\n")
+        print(f"[Identifier] Building CNN fallback database ({len(filenames)} sprites)...")
 
         for i, filename in enumerate(filenames):
             filepath = os.path.join(self.ref_dir, filename)
@@ -230,7 +170,7 @@ class CardIdentifier:
             else:
                 img_bgr = img[:, :, :3]
 
-            # Determine display name
+            # Get name
             if filename in self.name_map:
                 display_name = self.name_map[filename]
             else:
@@ -240,204 +180,339 @@ class CardIdentifier:
                 if len(parts) == 2 and parts[1].isdigit():
                     display_name = parts[0]
 
-            # Extract features
-            entry = {"display_name": display_name}
+            # CNN features
+            img_resized = cv2.resize(img_bgr, (224, 224))
+            features = self._extract_cnn_features(img_resized)
 
-            if self.use_cnn:
-                img_resized = cv2.resize(img_bgr, (224, 224))
-                entry["cnn_features"] = self._extract_cnn_features(img_resized)
-            else:
-                entry["fallback_features"] = self._extract_fallback_features(img_bgr)
+            self.database[filename] = {
+                "display_name": display_name,
+                "cnn_features": features,
+            }
 
-            self.database[filename] = entry
+            if (i + 1) % 30 == 0:
+                print(f"  [{i+1}/{len(filenames)}]")
 
-            if (i + 1) % 20 == 0 or i == 0:
-                print(f"  [{i+1}/{len(filenames)}] {display_name}")
-
-        # Save
         with open(self.db_path, "wb") as f:
             pickle.dump(self.database, f)
-        print(f"\n[Identifier] Saved {len(self.database)} Pokémon to {self.db_path}")
+        print(f"[Identifier] Saved {len(self.database)} entries")
+
+    def _extract_cnn_features(self, image):
+        """Extract CNN feature vector from an image."""
+        blob = cv2.dnn.blobFromImage(
+            image, scalefactor=1.0 / 255.0, size=(224, 224),
+            mean=(0.485, 0.456, 0.406), swapRB=False, crop=False
+        )
+        blob[0, 0] /= 0.229
+        blob[0, 1] /= 0.224
+        blob[0, 2] /= 0.225
+        self.net.setInput(blob)
+        output = self.net.forward().flatten()
+        norm = np.linalg.norm(output)
+        if norm > 0:
+            output = output / norm
+        return output
 
     # ------------------------------------------------------------------
-    # Card Artwork Extraction
+    # OCR-based identification (primary method)
     # ------------------------------------------------------------------
-    def _extract_artwork_region(self, card_image):
+    def _extract_name_region(self, card_image):
         """
-        Extract the artwork region from a Pokémon card.
-        Tries to dynamically find the artwork box, falls back to fixed coords.
+        Extract the top region of the card where the Pokémon name is printed.
+        On standard cards, the name is in roughly the top 12-15% of the card.
         """
         h, w = card_image.shape[:2]
 
-        # Try to find the artwork box dynamically using edge detection
-        gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
+        # Name region: top portion of card, slightly inset from edges
+        y1 = int(h * 0.02)
+        y2 = int(h * 0.14)
+        x1 = int(w * 0.05)
+        x2 = int(w * 0.80)  # Don't go full width (HP value is on the right)
 
-        # Look for the largest internal rectangle (the artwork border)
-        contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-
-        best_artwork = None
-        best_area = 0
-        min_area = h * w * 0.08   # At least 8% of card
-        max_area = h * w * 0.65   # At most 65% of card
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < min_area or area > max_area:
-                continue
-
-            peri = cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-
-            if len(approx) == 4 and cv2.isContourConvex(approx):
-                x, y, rw, rh = cv2.boundingRect(approx)
-                # Artwork should be wider than tall or roughly square
-                ratio = rw / max(rh, 1)
-                if 0.6 < ratio < 1.8 and area > best_area:
-                    best_area = area
-                    best_artwork = (x, y, rw, rh)
-
-        if best_artwork:
-            x, y, rw, rh = best_artwork
-            # Add small padding
-            pad = 5
-            x = max(0, x + pad)
-            y = max(0, y + pad)
-            rw = min(w - x, rw - 2 * pad)
-            rh = min(h - y, rh - 2 * pad)
-            return card_image[y:y+rh, x:x+rw]
-
-        # Fallback: fixed region (works for standard Pokémon card layout)
-        y1 = int(h * 0.10)
-        y2 = int(h * 0.58)
-        x1 = int(w * 0.06)
-        x2 = int(w * 0.94)
         return card_image[y1:y2, x1:x2]
 
-    # ------------------------------------------------------------------
-    # Identification
-    # ------------------------------------------------------------------
-    def identify(self, card_image):
+    def _preprocess_for_ocr(self, region):
         """
-        Identify which Pokémon is on the card.
-
-        Args:
-            card_image: BGR image of a cropped, perspective-corrected card.
-
-        Returns:
-            dict with 'name', 'confidence', 'matches'
+        Preprocess an image region for better OCR accuracy.
+        Returns multiple preprocessed versions to try.
         """
-        if not self.database:
-            return {"name": "No Pokémon DB", "confidence": 0.0, "matches": 0}
+        results = []
 
-        # Extract artwork region
-        artwork = self._extract_artwork_region(card_image)
-        if artwork is None or artwork.size == 0:
-            return {"name": "No artwork found", "confidence": 0.0, "matches": 0}
+        # Scale up for better OCR (Tesseract likes larger text)
+        h, w = region.shape[:2]
+        scale = max(3, 150 // max(h, 1))
+        large = cv2.resize(region, (w * scale, h * scale),
+                           interpolation=cv2.INTER_CUBIC)
 
-        if self.use_cnn:
-            return self._identify_cnn(artwork)
-        else:
-            return self._identify_fallback(artwork)
+        gray = cv2.cvtColor(large, cv2.COLOR_BGR2GRAY)
 
-    def _identify_cnn(self, artwork):
-        """Identify using CNN feature cosine similarity."""
+        # Version 1: Simple threshold
+        _, thresh1 = cv2.threshold(gray, 0, 255,
+                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        results.append(thresh1)
+
+        # Version 2: Inverted threshold (for dark backgrounds)
+        results.append(cv2.bitwise_not(thresh1))
+
+        # Version 3: Adaptive threshold
+        adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 21, 10)
+        results.append(adapt)
+
+        # Version 4: High contrast
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        _, thresh4 = cv2.threshold(enhanced, 0, 255,
+                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        results.append(thresh4)
+
+        return results
+
+    def _ocr_read(self, image_variants):
+        """
+        Run Tesseract OCR on multiple image variants, return all detected text.
+        """
+        if not TESSERACT_AVAILABLE:
+            return []
+
+        texts = []
+        ocr_config = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.' -"
+
+        for img in image_variants:
+            try:
+                text = pytesseract.image_to_string(img, config=ocr_config).strip()
+                if text and len(text) >= 3:
+                    texts.append(text)
+            except Exception:
+                continue
+
+        return texts
+
+    def _fuzzy_match(self, ocr_text):
+        """
+        Match OCR text against known Pokémon names.
+        Returns (name, confidence) or (None, 0).
+        """
+        if not ocr_text:
+            return None, 0.0
+
+        # Clean the OCR text
+        text = ocr_text.strip()
+
+        # Remove common card suffixes
+        for suffix in CARD_SUFFIXES:
+            text = text.replace(suffix, "").strip()
+
+        # Remove trailing/leading junk
+        text = re.sub(r'[^a-zA-Z.\' -]', '', text).strip()
+
+        if len(text) < 3:
+            return None, 0.0
+
+        text_lower = text.lower()
+        text_clean = re.sub(r'[^a-z]', '', text_lower)
+
+        # Exact match
+        if text_lower in self.pokemon_lookup:
+            return self.pokemon_lookup[text_lower], 0.95
+
+        if text_clean in self.pokemon_lookup:
+            return self.pokemon_lookup[text_clean], 0.93
+
+        # Starts-with match (handles OCR reading extra chars)
+        for key, name in self.pokemon_lookup.items():
+            if text_clean.startswith(key) and len(key) >= 4:
+                return name, 0.88
+            if key.startswith(text_clean) and len(text_clean) >= 4:
+                return name, 0.85
+
+        # Levenshtein-like distance (simple edit distance)
+        best_name = None
+        best_dist = 999
+        for key, name in self.pokemon_lookup.items():
+            if abs(len(key) - len(text_clean)) > 3:
+                continue
+            dist = self._edit_distance(text_clean, key)
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+
+        if best_dist <= 1 and len(text_clean) >= 4:
+            return best_name, 0.85
+        elif best_dist <= 2 and len(text_clean) >= 5:
+            return best_name, 0.70
+        elif best_dist <= 3 and len(text_clean) >= 6:
+            return best_name, 0.55
+
+        return None, 0.0
+
+    def _edit_distance(self, s1, s2):
+        """Simple Levenshtein edit distance."""
+        if len(s1) < len(s2):
+            return self._edit_distance(s2, s1)
+
+        if len(s2) == 0:
+            return len(s1)
+
+        prev_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            curr_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = prev_row[j + 1] + 1
+                deletions = curr_row[j] + 1
+                substitutions = prev_row[j] + (c1 != c2)
+                curr_row.append(min(insertions, deletions, substitutions))
+            prev_row = curr_row
+
+        return prev_row[-1]
+
+    # ------------------------------------------------------------------
+    # CNN fallback identification
+    # ------------------------------------------------------------------
+    def _identify_cnn(self, card_image):
+        """Identify using CNN feature matching (fallback)."""
+        if not self.use_cnn or not self.database:
+            return {"name": "Unknown", "confidence": 0.0, "matches": 0}
+
+        h, w = card_image.shape[:2]
+        artwork = card_image[int(h*0.10):int(h*0.58), int(w*0.06):int(w*0.94)]
         img = cv2.resize(artwork, (224, 224))
-        query_features = self._extract_cnn_features(img)
+        query = self._extract_cnn_features(img)
 
         best_name = "Unknown"
         best_score = -1
-        scores = []
 
         for filename, ref in self.database.items():
-            ref_features = ref.get("cnn_features")
-            if ref_features is None:
+            ref_feat = ref.get("cnn_features")
+            if ref_feat is None:
                 continue
-
-            # Cosine similarity (both vectors are already L2-normalized)
-            similarity = float(np.dot(query_features, ref_features))
-            scores.append((similarity, ref["display_name"]))
-
+            similarity = float(np.dot(query, ref_feat))
             if similarity > best_score:
                 best_score = similarity
                 best_name = ref["display_name"]
 
-        # Get top 3 for confidence calibration
-        scores.sort(reverse=True)
-        top_scores = [s[0] for s in scores[:3]]
-
-        # Confidence: how much better is #1 than #2?
-        if len(top_scores) >= 2:
-            gap = top_scores[0] - top_scores[1]
-            # Map the gap to confidence: 0.05 gap → ~0.6, 0.15+ gap → ~0.95
-            confidence = min(0.95, 0.5 + gap * 3.0)
-            confidence = max(0.1, confidence)
-        else:
-            confidence = max(0.1, min(0.95, best_score))
-
-        return {
-            "name": best_name,
-            "confidence": float(confidence),
-            "matches": int(best_score * 100),
-        }
-
-    def _identify_fallback(self, artwork):
-        """Identify using multi-feature matching (no CNN)."""
-        query = self._extract_fallback_features(artwork)
-
-        best_name = "Unknown"
-        best_score = -1
-
-        for filename, ref in self.database.items():
-            ref_feat = ref.get("fallback_features")
-            if ref_feat is None:
-                continue
-
-            # Compare each feature type and combine
-            score = 0.0
-
-            # Color histograms (HSV) — compare with correlation
-            for key in ("hist_h", "hist_s", "hist_v"):
-                s = cv2.compareHist(
-                    query[key].reshape(-1, 1).astype(np.float32),
-                    ref_feat[key].reshape(-1, 1).astype(np.float32),
-                    cv2.HISTCMP_CORREL
-                )
-                score += max(s, 0) * 0.10  # 3 histograms × 0.10 = 0.30
-
-            # Lab histograms
-            for key in ("hist_a", "hist_b"):
-                s = cv2.compareHist(
-                    query[key].reshape(-1, 1).astype(np.float32),
-                    ref_feat[key].reshape(-1, 1).astype(np.float32),
-                    cv2.HISTCMP_CORREL
-                )
-                score += max(s, 0) * 0.08  # 2 × 0.08 = 0.16
-
-            # Hu moments (shape similarity)
-            hu_dist = np.linalg.norm(query["hu_moments"] - ref_feat["hu_moments"])
-            hu_score = max(0, 1.0 - hu_dist / 20.0)
-            score += hu_score * 0.12
-
-            # Edge orientation histogram
-            edge_sim = float(np.dot(query["edge_hist"], ref_feat["edge_hist"]))
-            score += max(edge_sim, 0) * 0.18
-
-            # Spatial color layout
-            grid_sim = float(np.dot(query["color_grid"], ref_feat["color_grid"]))
-            score += max(grid_sim, 0) * 0.24
-
-            if score > best_score:
-                best_score = score
-                best_name = ref["display_name"]
-
-        confidence = float(np.clip(best_score, 0.0, 1.0))
+        confidence = float(np.clip(best_score * 0.8, 0.0, 0.7))
         return {
             "name": best_name,
             "confidence": confidence,
             "matches": int(best_score * 100),
         }
 
+    # ------------------------------------------------------------------
+    # Card number reading (e.g., "198/217")
+    # ------------------------------------------------------------------
+    def _extract_number_region(self, card_image):
+        """
+        Extract the bottom-left region where the card number is printed.
+        Standard cards show the number like "198/217" at the bottom.
+        """
+        h, w = card_image.shape[:2]
+        # Card number is typically bottom-left area
+        y1 = int(h * 0.90)
+        y2 = int(h * 0.98)
+        x1 = int(w * 0.03)
+        x2 = int(w * 0.45)
+        return card_image[y1:y2, x1:x2]
+
+    def _read_card_number(self, card_image):
+        """
+        Read the card number (e.g., "198/217") from the card.
+        Returns the number string or empty string if not found.
+        """
+        if not TESSERACT_AVAILABLE:
+            return ""
+
+        region = self._extract_number_region(card_image)
+        h, w = region.shape[:2]
+        if h < 5 or w < 10:
+            return ""
+
+        # Scale up
+        scale = max(3, 120 // max(h, 1))
+        large = cv2.resize(region, (w * scale, h * scale),
+                           interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(large, cv2.COLOR_BGR2GRAY)
+
+        # Try multiple preprocessing
+        variants = []
+        _, thresh = cv2.threshold(gray, 0, 255,
+                                   cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(thresh)
+        variants.append(cv2.bitwise_not(thresh))
+
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        _, thresh2 = cv2.threshold(enhanced, 0, 255,
+                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        variants.append(thresh2)
+
+        # OCR with digits and slash allowed
+        ocr_config = "--psm 7 -c tessedit_char_whitelist=0123456789/"
+
+        for img in variants:
+            try:
+                text = pytesseract.image_to_string(img, config=ocr_config).strip()
+                # Look for pattern like "198/217"
+                match = re.search(r'(\d{1,4})\s*/\s*(\d{1,4})', text)
+                if match:
+                    return f"{match.group(1)}/{match.group(2)}"
+            except Exception:
+                continue
+
+        return ""
+
+    # ------------------------------------------------------------------
+    # Main identification entry point
+    # ------------------------------------------------------------------
+    def identify(self, card_image):
+        """
+        Identify which Pokémon is on the card.
+        Primary: OCR (reads the name text)
+        Fallback: CNN feature matching
+        Also reads the card number (e.g., "198/217").
+
+        Args:
+            card_image: BGR image of a cropped, perspective-corrected card.
+
+        Returns:
+            dict with 'name', 'confidence', 'matches', 'card_number', etc.
+        """
+        # Read card number
+        card_number = self._read_card_number(card_image)
+
+        # Try OCR first for the name
+        if TESSERACT_AVAILABLE:
+            name_region = self._extract_name_region(card_image)
+            image_variants = self._preprocess_for_ocr(name_region)
+            ocr_texts = self._ocr_read(image_variants)
+
+            # Try matching each OCR result
+            best_name = None
+            best_conf = 0.0
+            best_text = ""
+
+            for text in ocr_texts:
+                name, conf = self._fuzzy_match(text)
+                if name and conf > best_conf:
+                    best_name = name
+                    best_conf = conf
+                    best_text = text
+
+            if best_name and best_conf >= 0.55:
+                return {
+                    "name": best_name,
+                    "confidence": best_conf,
+                    "matches": 0,
+                    "method": "OCR",
+                    "raw_ocr": best_text,
+                    "card_number": card_number,
+                }
+
+        # Fallback to CNN
+        cnn_result = self._identify_cnn(card_image)
+        cnn_result["method"] = "CNN (fallback)"
+        cnn_result["card_number"] = card_number
+        return cnn_result
+
     def get_card_count(self):
         """Return the number of Pokémon in the database."""
-        return len(self.database)
+        return max(len(self.database), len(POKEMON_NAMES))
