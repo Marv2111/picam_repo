@@ -52,6 +52,12 @@ class Camera:
         )
         self._camera.configure(cam_config)
         self._camera.start()
+        # Enable continuous autofocus (Pi Camera Module 3)
+        try:
+            self._camera.set_controls({"AfMode": 2, "AfTrigger": 0})
+            print("[Camera] Continuous autofocus enabled")
+        except Exception as e:
+            print(f"[Camera] Autofocus not available: {e}")
         # Allow auto-exposure to settle
         time.sleep(2)
 
@@ -69,8 +75,6 @@ class Camera:
             try:
                 if self.use_picamera:
                     frame = self._camera.capture_array()
-                    # Picamera2 returns RGB; convert to BGR for OpenCV
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 else:
                     ret, frame = self._camera.read()
                     if not ret:
