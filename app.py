@@ -122,15 +122,14 @@ class Pipeline:
                         det['cropped'] = self.detector._perspective_transform(frame, scaled_corners)
 
                         # Quick OCR on auto-detected card
-                        auto_id = self.identifier.identify(det['cropped'])
                         auto_det = det
 
                         with self._lock:
                             self._auto_detection = det
                             self._auto_result = {
-                                "name": auto_id["name"],
-                                "confidence": auto_id["confidence"],
-                                "card_number": auto_id["card_number"],
+                                "name": "Card detected",
+                                "confidence": 0.0,
+                                "card_number": "",
                             }
                 except Exception as e:
                     pass  # Auto-detect is a bonus, don't crash on errors

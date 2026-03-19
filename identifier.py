@@ -117,8 +117,8 @@ class CardIdentifier:
 
         h, w = card.shape[:2]
 
-        # Name region: top strip of the card
-        region = card[int(h * 0.02):int(h * 0.13), int(w * 0.05):int(w * 0.75)]
+        # Name region: top strip — wider and taller to be safe
+        region = card[int(h * 0.01):int(h * 0.16), int(w * 0.03):int(w * 0.80)]
 
         # Preprocess for OCR
         variants = self._preprocess(region)
@@ -128,15 +128,17 @@ class CardIdentifier:
         best_conf = 0.0
         best_raw = ""
 
-        ocr_cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.'-"
+        ocr_cfg = "--psm 7"
 
         for img in variants:
             try:
                 text = pytesseract.image_to_string(img, config=ocr_cfg).strip()
+                print(f"[OCR name] raw: '{text}'")
                 if len(text) < 3:
                     continue
 
                 name, conf = self._fuzzy_match(text)
+                print(f"[OCR name] matched: {name} ({conf:.0%})")
                 if name and conf > best_conf:
                     best_name = name
                     best_conf = conf
@@ -164,8 +166,11 @@ class CardIdentifier:
             try:
                 text = pytesseract.image_to_string(img, config=ocr_cfg).strip()
                 match = re.search(r'(\d{1,4})\s*/\s*(\d{1,4})', text)
+                print(f"[OCR number] raw: '{text}'")
                 if match:
-                    return f"{match.group(1)}/{match.group(2)}"
+                    result = f"{match.group(1)}/{match.group(2)}"
+                    print(f"[OCR number] found: {result}")
+                    return result
             except Exception:
                 continue
         return ""
