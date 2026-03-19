@@ -134,11 +134,12 @@ class Pipeline:
                             }
                 except Exception as e:
                     pass  # Auto-detect is a bonus, don't crash on errors
-                elif self._frame_count % 30 == 0:
-                    # Clear stale auto-detect after a while
-                    with self._lock:
-                        self._auto_detection = None
-                        self._auto_result = None
+
+            # Clear stale auto-detect periodically
+            if config.AUTO_DETECT_ENABLED and self._frame_count % 30 == 0 and auto_det is None:
+                with self._lock:
+                    self._auto_detection = None
+                    self._auto_result = None
 
             # Draw auto-detect box if we have one
             with self._lock:
