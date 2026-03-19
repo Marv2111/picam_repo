@@ -106,30 +106,34 @@ class Pipeline:
             # Run auto-detect every 10 frames (low CPU cost)
             auto_det = None
             if config.AUTO_DETECT_ENABLED and self._frame_count % 10 == 0:
-                # Run on smaller image for speed
-                small = cv2.resize(frame, (config.PROCESS_WIDTH, config.PROCESS_HEIGHT))
-                det = self.detector.auto_detect(small)
+                try:
+                    # Run on smaller image for speed
+                    small = cv2.resize(frame, (config.PROCESS_WIDTH, config.PROCESS_HEIGHT))
+                    det = self.detector.auto_detect(small)
 
-                if det is not None:
-                    # Scale corners back to full resolution
-                    sx = frame.shape[1] / config.PROCESS_WIDTH
-                    sy = frame.shape[0] / config.PROCESS_HEIGHT
-                    det['corners'] = det['corners'] * np.array([sx, sy])
-                    x, y, w, h = det['bbox']
-                    det['bbox'] = (int(x*sx), int(y*sy), int(w*sx), int(h*sy))
-                    det['cropped'] = self.detector._perspective_transform(frame, det['corners'])
+                    if det is not None:
+                        # Scale corners back to full resolution
+                        sx = frame.shape[1] / config.PROCESS_WIDTH
+                        sy = frame.shape[0] / config.PROCESS_HEIGHT
+                        scaled_corners = (det['corners'] * np.array([sx, sy], dtype=np.float32)).astype(np.float32)
+                        det['corners'] = scaled_corners
+                        x, y, w, h = det['bbox']
+                        det['bbox'] = (int(x*sx), int(y*sy), int(w*sx), int(h*sy))
+                        det['cropped'] = self.detector._perspective_transform(frame, scaled_corners)
 
-                    # Quick OCR on auto-detected card
-                    auto_id = self.identifier.identify(det['cropped'])
-                    auto_det = det
+                        # Quick OCR on auto-detected card
+                        auto_id = self.identifier.identify(det['cropped'])
+                        auto_det = det
 
-                    with self._lock:
-                        self._auto_detection = det
-                        self._auto_result = {
-                            "name": auto_id["name"],
-                            "confidence": auto_id["confidence"],
-                            "card_number": auto_id["card_number"],
-                        }
+                        with self._lock:
+                            self._auto_detection = det
+                            self._auto_result = {
+                                "name": auto_id["name"],
+                                "confidence": auto_id["confidence"],
+                                "card_number": auto_id["card_number"],
+                            }
+                except Exception as e:
+                    pass  # Auto-detect is a bonus, don't crash on errors
                 elif self._frame_count % 30 == 0:
                     # Clear stale auto-detect after a while
                     with self._lock:
