@@ -140,30 +140,18 @@ function renderScan(d) {
 async function lookupPrice() {
     if (!_lastScan) return;
     const box = document.getElementById('priceBox');
-    box.innerHTML = '<div class="loading">Looking up on Cardmarket...</div>';
+    
+    const q = _lastScan.name + (_lastScan.card_number ? ' ' + _lastScan.card_number : '');
+    const url = 'https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=' + encodeURIComponent(q);
+    _price = { found: true, url: url, price_avg: 'N/A', price_low: 'N/A', price_trend: 'N/A' };
 
-    try {
-        const p = new URLSearchParams({name: _lastScan.name, number: _lastScan.card_number || ''});
-        const res = await fetch('/lookup_price?' + p);
-        _price = await res.json();
-
-        if (_price.found) {
-            box.innerHTML = `
-                <div class="price-result">
-                    <div class="price-name">${_price.name || _lastScan.name}</div>
-                    <div class="price-values">
-                        ${_price.price_trend !== 'N/A' ? `<span class="price-tag">Trend: <b>${_price.price_trend}</b></span>` : ''}
-                        ${_price.price_avg !== 'N/A' ? `<span class="price-tag">Avg: <b>${_price.price_avg}</b></span>` : ''}
-                        ${_price.price_low !== 'N/A' ? `<span class="price-tag">Low: <b>${_price.price_low}</b></span>` : ''}
-                    </div>
-                    ${_price.url ? `<a href="${_price.url}" target="_blank" class="cm-link">View on Cardmarket →</a>` : ''}
-                </div>`;
-        } else {
-            box.innerHTML = `<div class="price-error">Not found: ${_price.error || 'Unknown'}</div>`;
-        }
-    } catch (e) {
-        box.innerHTML = `<div class="price-error">Lookup failed: ${e.message}</div>`;
-    }
+    box.innerHTML = `
+        <div class="price-result">
+            <div class="price-name">Search: ${q}</div>
+            <a href="${url}" target="_blank" class="btn btn-price" style="display:block;text-decoration:none;margin-top:.5rem;">
+                🔗 Open on Cardmarket
+            </a>
+        </div>`;
 }
 
 /* === Save === */

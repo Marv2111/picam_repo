@@ -86,19 +86,25 @@ class CardIdentifier:
               f"OCR {'available' if TESSERACT_AVAILABLE else 'NOT available'}")
 
     def identify(self, card_image):
-        """
-        Read name and card number from a cropped card image.
-
-        Args:
-            card_image: BGR, ideally 300x420 (portrait, perspective-corrected)
-
-        Returns:
-            dict with name, confidence, card_number, raw_ocr
-        """
         card = cv2.resize(card_image, (300, 420))
 
+        # Try normal orientation
         name_result = self._read_name(card)
         card_number = self._read_card_number(card)
+
+        # If name failed, try flipped (card might be upside down)
+        if name_result["confidence"] < 0.5:
+            flipped = cv2.rotate(card, cv2.ROTATE_180)
+            flip_name = self._read_name(flipped)
+            flip_number = self._read_card_number(flipped)
+            print(f"[OCR] Trying flipped: name='{flip_name['raw_ocr']}' num='{flip_number}'")
+            if flip_name["confidence"] > name_result["confidence"]:
+                name_result = flip_name
+                card_number = flip_number
+
+        # Save debug image on each scan
+        cv2.imwrite('debug_last_scan.jpg', card)
+        print(f"[Scan] Final: name='{name_result['name']}' number='{card_number}'")
 
         return {
             "name": name_result["name"],
