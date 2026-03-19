@@ -11,297 +11,273 @@
         <h1>⚡ Pokémon Card Grader</h1>
         <nav class="tabs">
             <button class="tab active" onclick="showTab('scanner')">📷 Scanner</button>
-            <button class="tab" onclick="showTab('collection')">📦 Collection <span id="colBadge" class="badge">{{ col_count }}</span></button>
+            <button class="tab" onclick="showTab('collection')">📦 Collection <span class="badge" id="colBadge">{{ col_count }}</span></button>
         </nav>
     </header>
 
-    <!-- ==================== SCANNER TAB ==================== -->
+    <!-- ===== SCANNER ===== -->
     <main id="tab-scanner">
         <section class="video-panel">
             <div class="video-container">
-                <img src="/video_feed" alt="Live Camera Feed" id="videoFeed">
-                <div class="video-overlay" id="statusOverlay">Connecting...</div>
+                <img src="/video_feed" id="videoFeed" alt="Camera">
             </div>
-            <div class="video-footer">
-                <span id="fpsDisplay">-- FPS</span>
-                <span>DB: {{ ref_count }} Pokémon</span>
-            </div>
+            <button class="scan-btn" id="scanBtn" onclick="doScan()">
+                📷 SCAN CARD
+            </button>
+            <p class="scan-hint">Align the card inside the yellow guide frame, then press Scan</p>
         </section>
 
-        <section class="results-panel">
-            <div class="card-info" id="cardInfo">
-                <div class="info-placeholder">
-                    <p>📷 Point the camera at a Pokémon card</p>
-                    <p class="hint">Place the card on a dark, contrasting surface</p>
-                </div>
+        <section class="results-panel" id="resultsPanel">
+            <div class="info-placeholder" id="placeholder">
+                <p>📷 Align a card and press Scan</p>
+                <p class="hint">The guide frame on the video shows where to place it</p>
             </div>
+            <div id="scanResult" style="display:none;"></div>
+            <div id="autoResult" class="auto-result-box" style="display:none;"></div>
         </section>
     </main>
 
-    <!-- ==================== COLLECTION TAB ==================== -->
+    <!-- ===== COLLECTION ===== -->
     <main id="tab-collection" style="display:none;">
         <section class="collection-panel">
             <div class="collection-header">
                 <h2>My Collection</h2>
-                <div class="collection-stats" id="collectionStats">Loading...</div>
+                <div class="collection-stats" id="colStats"></div>
             </div>
-            <div class="collection-list" id="collectionList">
-                <p class="hint">Loading collection...</p>
-            </div>
+            <div id="colList"><p class="hint">Loading...</p></div>
         </section>
     </main>
 
-    <script>
-    /* ========== TAB SWITCHING ========== */
-    function showTab(tab) {
-        document.querySelectorAll('main').forEach(m => m.style.display = 'none');
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.getElementById('tab-' + tab).style.display = 'flex';
-        event.target.classList.add('active');
-        if (tab === 'collection') loadCollection();
+<script>
+/* === Tabs === */
+function showTab(t) {
+    document.querySelectorAll('main').forEach(m => m.style.display = 'none');
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + t).style.display = 'flex';
+    event.target.closest('.tab').classList.add('active');
+    if (t === 'collection') loadCollection();
+}
+
+/* === Grade helpers === */
+function gc(grade) {
+    return {'Mint':'grade-mint','Near Mint':'grade-nm','Excellent':'grade-ex',
+            'Good':'grade-good','Poor':'grade-poor'}[grade] || '';
+}
+function defBar(score) {
+    const pct = Math.round(score * 100);
+    let col = '#4caf50';
+    if (pct > 60) col = '#f44336';
+    else if (pct > 30) col = '#ff9800';
+    else if (pct > 10) col = '#ffeb3b';
+    return `<div class="defect-bar"><div class="defect-fill" style="width:${pct}%;background:${col}"></div></div>`;
+}
+
+/* === SCAN === */
+let _lastScan = null;
+let _price = null;
+
+async function doScan() {
+    const btn = document.getElementById('scanBtn');
+    btn.textContent = '⏳ Scanning...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/scan', { method: 'POST' });
+        const data = await res.json();
+        _lastScan = data;
+        _price = null;
+        renderScan(data);
+    } catch (e) {
+        document.getElementById('scanResult').innerHTML =
+            `<div class="error">Scan failed: ${e.message}</div>`;
     }
+    btn.textContent = '📷 SCAN CARD';
+    btn.disabled = false;
+}
 
-    /* ========== VIDEO FEED ========== */
-    const videoFeed = document.getElementById('videoFeed');
-    const statusOverlay = document.getElementById('statusOverlay');
-    videoFeed.onload = () => { statusOverlay.style.display = 'none'; };
-    videoFeed.onerror = () => { statusOverlay.textContent = 'Camera unavailable'; };
+function renderScan(d) {
+    document.getElementById('placeholder').style.display = 'none';
+    const el = document.getElementById('scanResult');
+    el.style.display = 'block';
 
-    /* ========== GRADE HELPERS ========== */
-    function gradeClass(grade) {
-        return { 'Mint':'grade-mint','Near Mint':'grade-nm','Excellent':'grade-ex','Good':'grade-good','Poor':'grade-poor' }[grade] || '';
+    const g = gc(d.grade);
+    el.innerHTML = `
+        <div class="card-result">
+            <div class="card-header">
+                <h2>${d.name}</h2>
+                <span class="confidence">${(d.confidence * 100).toFixed(0)}%</span>
+            </div>
+            ${d.card_number ? `<div class="card-num">📋 ${d.card_number}</div>` : ''}
+            ${d.raw_ocr ? `<div class="method-tag">OCR read: "${d.raw_ocr}"</div>` : ''}
+
+            <div class="grade-display ${g}">
+                <span class="grade-label">Grade</span>
+                <span class="grade-value">${d.grade}</span>
+                <span class="grade-score">${(d.score * 100).toFixed(1)}% defect</span>
+            </div>
+
+            <div class="defect-list">
+                <h3>Defects</h3>
+                ${Object.entries(d.defects).map(([k,v]) => `
+                    <div class="defect-row">
+                        <span class="defect-name">${k.replace(/_/g,' ')}</span>
+                        ${defBar(v)}
+                        <span class="defect-detail">${d.details[k]}</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <div class="action-buttons">
+                <button class="btn btn-price" onclick="lookupPrice()">💰 Look up Price</button>
+                <button class="btn btn-save" id="saveBtn" onclick="saveCard()">💾 Save to Collection</button>
+            </div>
+
+            <div id="priceBox"></div>
+        </div>`;
+}
+
+/* === Price lookup === */
+async function lookupPrice() {
+    if (!_lastScan) return;
+    const box = document.getElementById('priceBox');
+    box.innerHTML = '<div class="loading">Looking up on Cardmarket...</div>';
+
+    try {
+        const p = new URLSearchParams({name: _lastScan.name, number: _lastScan.card_number || ''});
+        const res = await fetch('/lookup_price?' + p);
+        _price = await res.json();
+
+        if (_price.found) {
+            box.innerHTML = `
+                <div class="price-result">
+                    <div class="price-name">${_price.name || _lastScan.name}</div>
+                    <div class="price-values">
+                        ${_price.price_trend !== 'N/A' ? `<span class="price-tag">Trend: <b>${_price.price_trend}</b></span>` : ''}
+                        ${_price.price_avg !== 'N/A' ? `<span class="price-tag">Avg: <b>${_price.price_avg}</b></span>` : ''}
+                        ${_price.price_low !== 'N/A' ? `<span class="price-tag">Low: <b>${_price.price_low}</b></span>` : ''}
+                    </div>
+                    ${_price.url ? `<a href="${_price.url}" target="_blank" class="cm-link">View on Cardmarket →</a>` : ''}
+                </div>`;
+        } else {
+            box.innerHTML = `<div class="price-error">Not found: ${_price.error || 'Unknown'}</div>`;
+        }
+    } catch (e) {
+        box.innerHTML = `<div class="price-error">Lookup failed: ${e.message}</div>`;
     }
+}
 
-    function defectBar(score) {
-        const pct = Math.round(score * 100);
-        let color = '#4caf50';
-        if (pct > 60) color = '#f44336';
-        else if (pct > 30) color = '#ff9800';
-        else if (pct > 10) color = '#ffeb3b';
-        return `<div class="defect-bar"><div class="defect-fill" style="width:${pct}%;background:${color}"></div></div>`;
+/* === Save === */
+async function saveCard() {
+    if (!_lastScan) return;
+    const btn = document.getElementById('saveBtn');
+    btn.textContent = '⏳ Saving...';
+    btn.disabled = true;
+
+    const payload = {
+        name: _lastScan.name,
+        card_number: _lastScan.card_number || '',
+        grade: _lastScan.grade,
+        grade_score: _lastScan.score,
+        price_avg: _price?.price_avg || 'N/A',
+        price_low: _price?.price_low || 'N/A',
+        price_trend: _price?.price_trend || 'N/A',
+        cardmarket_url: _price?.url || '',
+        defects: _lastScan.defects,
+    };
+
+    try {
+        const res = await fetch('/save_card', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (data.success) {
+            btn.textContent = '✅ Saved!';
+            btn.classList.add('btn-saved');
+            updateBadge();
+        }
+    } catch (e) {
+        btn.textContent = '❌ Failed';
+        btn.disabled = false;
     }
+}
 
-    /* ========== RENDER SCANNER RESULTS ========== */
-    function renderResults(data) {
-        const el = document.getElementById('cardInfo');
-        const fpsEl = document.getElementById('fpsDisplay');
+/* === Auto-detect display === */
+async function pollAuto() {
+    try {
+        const res = await fetch('/results');
+        const data = await res.json();
+        const el = document.getElementById('autoResult');
 
-        if (!data.cards || data.cards.length === 0) {
-            el.innerHTML = `<div class="info-placeholder"><p>📷 Point the camera at a Pokémon card</p><p class="hint">Place the card on a dark, contrasting surface</p></div>`;
+        if (data.auto && data.auto.name && data.auto.name !== 'Unknown') {
+            el.style.display = 'block';
+            el.innerHTML = `<span class="auto-tag">🔍 Auto-detect:</span> 
+                <b>${data.auto.name}</b>
+                ${data.auto.card_number ? ` [${data.auto.card_number}]` : ''}
+                <span class="auto-conf">${(data.auto.confidence * 100).toFixed(0)}%</span>`;
+        } else {
+            el.style.display = 'none';
+        }
+    } catch (e) {}
+}
+setInterval(pollAuto, 1000);
+
+/* === Collection === */
+async function loadCollection() {
+    try {
+        const res = await fetch('/collection');
+        const data = await res.json();
+        const v = data.value;
+
+        document.getElementById('colStats').innerHTML =
+            `<span>${v.total_count} cards</span> • <span>Value: <b>€${v.total_eur.toFixed(2)}</b> (${v.priced_count} priced)</span>`;
+
+        if (data.cards.length === 0) {
+            document.getElementById('colList').innerHTML =
+                '<p class="hint">No cards yet. Scan a card and click Save.</p>';
             return;
         }
 
-        if (data.fps) fpsEl.textContent = data.fps.toFixed(1) + ' FPS';
+        let h = '<table class="col-table"><thead><tr>'
+            + '<th>Name</th><th>#</th><th>Grade</th><th>Avg Price</th><th>Saved</th><th></th>'
+            + '</tr></thead><tbody>';
 
-        let html = '';
-        data.cards.forEach((card, i) => {
-            const gc = gradeClass(card.grade);
-            const hasNumber = card.card_number && card.card_number.length > 0;
-            const cardId = `card-${i}`;
-
-            html += `
-            <div class="card-result" id="${cardId}">
-                <div class="card-header">
-                    <h2>${card.name}</h2>
-                    <span class="confidence">${(card.confidence * 100).toFixed(0)}%</span>
-                </div>
-
-                ${hasNumber ? `<div class="card-number-tag">📋 ${card.card_number}</div>` : ''}
-                ${card.method ? `<div class="method-tag">${card.method}${card.raw_ocr ? ` — "${card.raw_ocr}"` : ''}</div>` : ''}
-
-                <div class="grade-display ${gc}">
-                    <span class="grade-label">Grade</span>
-                    <span class="grade-value">${card.grade}</span>
-                    <span class="grade-score">${(card.score * 100).toFixed(1)}% defect</span>
-                </div>
-
-                <div class="defect-list">
-                    <h3>Defects</h3>
-                    ${Object.entries(card.defects).map(([key, val]) => `
-                        <div class="defect-row">
-                            <span class="defect-name">${key.replace(/_/g, ' ')}</span>
-                            ${defectBar(val)}
-                            <span class="defect-detail">${card.details[key]}</span>
-                        </div>
-                    `).join('')}
-                </div>
-
-                <!-- Price lookup + Save -->
-                <div class="price-section" id="price-${i}">
-                    <button class="btn btn-price" onclick="lookupPrice('${card.name}', '${card.card_number || ''}', ${i})">
-                        💰 Look up Price
-                    </button>
-                </div>
-
-                <div class="save-section">
-                    <button class="btn btn-save" onclick="saveCard(${i})" id="save-btn-${i}">
-                        💾 Save to Collection
-                    </button>
-                </div>
-            </div>`;
+        data.cards.forEach(c => {
+            h += `<tr>
+                <td><b>${c.name}</b></td>
+                <td>${c.card_number || '-'}</td>
+                <td><span class="pill ${gc(c.grade)}">${c.grade}</span></td>
+                <td>${c.price_avg || 'N/A'}</td>
+                <td class="date">${c.saved_at}</td>
+                <td>
+                    ${c.cardmarket_url ? `<a href="${c.cardmarket_url}" target="_blank" class="cm-sm">CM</a>` : ''}
+                    <button class="btn-del" onclick="delCard(${c.id})">🗑</button>
+                </td>
+            </tr>`;
         });
-
-        el.innerHTML = html;
-        // Store current data for save
-        window._currentCards = data.cards;
+        h += '</tbody></table>';
+        document.getElementById('colList').innerHTML = h;
+    } catch (e) {
+        document.getElementById('colList').innerHTML = `<p class="hint">Error: ${e.message}</p>`;
     }
+}
 
-    /* ========== PRICE LOOKUP ========== */
-    window._prices = {};
+async function delCard(id) {
+    if (!confirm('Delete this card?')) return;
+    await fetch('/delete_card', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) });
+    loadCollection();
+    updateBadge();
+}
 
-    async function lookupPrice(name, number, idx) {
-        const el = document.getElementById('price-' + idx);
-        el.innerHTML = '<div class="loading">Looking up on Cardmarket...</div>';
-
-        try {
-            const params = new URLSearchParams({ name, number });
-            const res = await fetch('/lookup_price?' + params);
-            const data = await res.json();
-            window._prices[idx] = data;
-
-            if (data.found) {
-                el.innerHTML = `
-                    <div class="price-result">
-                        <div class="price-name">${data.name || name}</div>
-                        <div class="price-values">
-                            ${data.price_trend && data.price_trend !== 'N/A' ? `<span class="price-tag">Trend: <strong>${data.price_trend}</strong></span>` : ''}
-                            ${data.price_avg && data.price_avg !== 'N/A' ? `<span class="price-tag">Avg: <strong>${data.price_avg}</strong></span>` : ''}
-                            ${data.price_low && data.price_low !== 'N/A' ? `<span class="price-tag">Low: <strong>${data.price_low}</strong></span>` : ''}
-                        </div>
-                        ${data.url ? `<a href="${data.url}" target="_blank" class="cm-link">View on Cardmarket →</a>` : ''}
-                    </div>`;
-            } else {
-                el.innerHTML = `<div class="price-error">Not found: ${data.error || 'Unknown error'}</div>
-                    <button class="btn btn-price" onclick="lookupPrice('${name}', '${number}', ${idx})">Retry</button>`;
-            }
-        } catch (e) {
-            el.innerHTML = `<div class="price-error">Lookup failed: ${e.message}</div>
-                <button class="btn btn-price" onclick="lookupPrice('${name}', '${number}', ${idx})">Retry</button>`;
-        }
-    }
-
-    /* ========== SAVE CARD ========== */
-    async function saveCard(idx) {
-        const card = window._currentCards[idx];
-        const price = window._prices[idx] || {};
-        const btn = document.getElementById('save-btn-' + idx);
-        btn.textContent = 'Saving...';
-        btn.disabled = true;
-
-        const payload = {
-            name: card.name,
-            card_number: card.card_number || '',
-            set_name: '',
-            grade: card.grade,
-            grade_score: card.score,
-            price_avg: price.price_avg || 'N/A',
-            price_low: price.price_low || 'N/A',
-            price_trend: price.price_trend || 'N/A',
-            cardmarket_url: price.url || '',
-            defects: card.defects,
-        };
-
-        try {
-            const res = await fetch('/save_card', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            const data = await res.json();
-            if (data.success) {
-                btn.textContent = '✅ Saved!';
-                btn.classList.add('btn-saved');
-                updateColBadge();
-            } else {
-                btn.textContent = '❌ Error';
-                btn.disabled = false;
-            }
-        } catch (e) {
-            btn.textContent = '❌ Failed';
-            btn.disabled = false;
-        }
-    }
-
-    /* ========== COLLECTION ========== */
-    async function loadCollection() {
-        const listEl = document.getElementById('collectionList');
-        const statsEl = document.getElementById('collectionStats');
-
-        try {
-            const res = await fetch('/collection');
-            const data = await res.json();
-
-            // Stats
-            const v = data.value;
-            statsEl.innerHTML = `
-                <span>${v.total_count} cards</span>
-                <span>•</span>
-                <span>Est. value: <strong>€${v.total_eur.toFixed(2)}</strong> (${v.priced_count} priced)</span>
-            `;
-
-            if (data.cards.length === 0) {
-                listEl.innerHTML = '<p class="hint">No cards saved yet. Scan a card and click "Save to Collection".</p>';
-                return;
-            }
-
-            let html = '<table class="collection-table"><thead><tr>'
-                + '<th>Name</th><th>#</th><th>Grade</th><th>Avg Price</th><th>Saved</th><th></th>'
-                + '</tr></thead><tbody>';
-
-            data.cards.forEach(card => {
-                const gc = gradeClass(card.grade);
-                html += `<tr>
-                    <td><strong>${card.name}</strong></td>
-                    <td>${card.card_number || '-'}</td>
-                    <td><span class="grade-pill ${gc}">${card.grade}</span></td>
-                    <td>${card.price_avg || 'N/A'}</td>
-                    <td class="date-cell">${card.saved_at}</td>
-                    <td>
-                        ${card.cardmarket_url ? `<a href="${card.cardmarket_url}" target="_blank" class="cm-link-small">CM</a>` : ''}
-                        <button class="btn-delete" onclick="deleteCard(${card.id})">🗑</button>
-                    </td>
-                </tr>`;
-            });
-
-            html += '</tbody></table>';
-            listEl.innerHTML = html;
-        } catch (e) {
-            listEl.innerHTML = `<p class="hint">Error loading collection: ${e.message}</p>`;
-        }
-    }
-
-    async function deleteCard(id) {
-        if (!confirm('Delete this card from collection?')) return;
-        try {
-            await fetch('/delete_card', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id }),
-            });
-            loadCollection();
-            updateColBadge();
-        } catch (e) {
-            alert('Delete failed');
-        }
-    }
-
-    async function updateColBadge() {
-        try {
-            const res = await fetch('/collection');
-            const data = await res.json();
-            document.getElementById('colBadge').textContent = data.cards.length;
-        } catch (e) {}
-    }
-
-    /* ========== POLLING ========== */
-    async function fetchResults() {
-        try {
-            const res = await fetch('/results');
-            const data = await res.json();
-            renderResults(data);
-        } catch (e) {}
-    }
-    setInterval(fetchResults, 500);
-    </script>
+async function updateBadge() {
+    try {
+        const r = await fetch('/collection');
+        const d = await r.json();
+        document.getElementById('colBadge').textContent = d.cards.length;
+    } catch(e) {}
+}
+</script>
 </body>
 </html>

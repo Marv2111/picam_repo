@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
 Pokémon Card Grader — Main Application
-=======================================
-Runs the complete pipeline: camera → detection → identification → grading → web UI.
-
-Usage:
-    python3 app.py [--port 5000] [--width 1280] [--height 720]
-                   [--skip-frames 3] [--demo]
+Guide-frame scan (primary) + auto-detect (bonus).
 """
 
 import argparse
 import threading
 import time
-import sys
 import cv2
+import numpy as np
 
 import config
+from camera import Camera
 from detector import CardDetector
 from identifier import CardIdentifier
 from grader import CardGrader
@@ -23,212 +19,159 @@ from web_ui import WebUI
 
 
 class Pipeline:
-    """
-    Main processing pipeline.
-    Continuously captures frames, detects cards, identifies and grades them,
-    and makes results available to the web UI.
-    """
+    """Processing pipeline with guide-frame and auto-detect."""
 
-    def __init__(self, camera, frame_skip=None):
+    def __init__(self, camera):
         self.camera = camera
         self.detector = CardDetector()
         self.identifier = CardIdentifier()
         self.grader = CardGrader()
-        self.frame_skip = frame_skip or config.FRAME_SKIP
 
-        # Shared state (thread-safe)
         self._lock = threading.Lock()
         self._display_frame = None
-        self._results = {'cards': [], 'fps': 0.0}
+        self._scan_result = None        # Latest scan result
+        self._auto_result = None        # Latest auto-detect result
+        self._auto_detection = None     # Auto-detect box for overlay
         self._running = False
+        self._frame_count = 0
 
     def start(self):
-        """Start the processing loop in a background thread."""
         self.camera.start()
         self._running = True
-        thread = threading.Thread(target=self._process_loop, daemon=True)
-        thread.start()
-        print("[Pipeline] Processing started")
+        threading.Thread(target=self._display_loop, daemon=True).start()
+        print("[Pipeline] Ready — use the Scan button or auto-detect")
 
     def stop(self):
-        """Stop the pipeline."""
         self._running = False
         self.camera.stop()
 
     def get_display_frame(self):
-        """Get the latest annotated frame for the video stream."""
         with self._lock:
             return self._display_frame
 
     def get_results(self):
-        """Get the latest detection/grading results as a dict."""
+        """Return current state for the UI."""
         with self._lock:
-            return self._results.copy()
+            return {
+                "scan": self._scan_result,
+                "auto": self._auto_result,
+            }
 
-    def _process_loop(self):
-        """Main processing loop."""
-        frame_count = 0
-        fps_start = time.time()
-        fps_frames = 0
-        current_fps = 0.0
+    def scan_guide_frame(self):
+        """
+        Triggered by the Scan button.
+        Crops the guide frame region, runs OCR + grading.
+        Returns the result dict.
+        """
+        frame = self.camera.get_frame()
+        if frame is None:
+            return {"error": "No camera frame"}
 
-        # Cache the last results so we can draw them every frame
-        last_detections = []
-        last_card_results = []
+        # Crop the guide region
+        card_img = self.detector.crop_guide_region(frame)
 
+        # Step 1: Identify (OCR reads name + number)
+        id_result = self.identifier.identify(card_img)
+
+        # Step 2: Grade condition
+        grade_result = self.grader.grade(card_img)
+
+        result = {
+            "name": id_result["name"],
+            "confidence": id_result["confidence"],
+            "card_number": id_result["card_number"],
+            "raw_ocr": id_result["raw_ocr"],
+            "grade": grade_result["grade"],
+            "score": grade_result["score"],
+            "defects": grade_result["defects"],
+            "details": grade_result["details"],
+        }
+
+        with self._lock:
+            self._scan_result = result
+
+        return result
+
+    def _display_loop(self):
+        """Continuously update the display frame with overlays."""
         while self._running:
             frame = self.camera.get_frame()
             if frame is None:
                 time.sleep(0.01)
                 continue
 
-            frame_count += 1
-            fps_frames += 1
-
-            # Calculate FPS every second
-            elapsed = time.time() - fps_start
-            if elapsed >= 1.0:
-                current_fps = fps_frames / elapsed
-                fps_frames = 0
-                fps_start = time.time()
-
-            # Only run heavy processing every N frames
-            if frame_count % self.frame_skip == 0:
-                last_detections, last_card_results = self._analyze_frame(frame)
-
-            # Draw overlays on every frame (using cached results)
             display = frame.copy()
-            self.detector.draw_detections(display, last_detections, last_card_results)
+            self._frame_count += 1
 
-            # Draw FPS counter
-            cv2.putText(display, f"{current_fps:.1f} FPS", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Run auto-detect every 10 frames (low CPU cost)
+            auto_det = None
+            if config.AUTO_DETECT_ENABLED and self._frame_count % 10 == 0:
+                # Run on smaller image for speed
+                small = cv2.resize(frame, (config.PROCESS_WIDTH, config.PROCESS_HEIGHT))
+                det = self.detector.auto_detect(small)
 
-            # Build JSON-serializable results
-            cards_json = []
-            for r in last_card_results:
-                cards_json.append({
-                    'name': r['name'],
-                    'confidence': r['confidence'],
-                    'grade': r['grade'],
-                    'score': r['score'],
-                    'defects': r['defects'],
-                    'details': r['details'],
-                    'method': r.get('method', ''),
-                    'raw_ocr': r.get('raw_ocr', ''),
-                    'card_number': r.get('card_number', ''),
-                })
+                if det is not None:
+                    # Scale corners back to full resolution
+                    sx = frame.shape[1] / config.PROCESS_WIDTH
+                    sy = frame.shape[0] / config.PROCESS_HEIGHT
+                    det['corners'] = det['corners'] * np.array([sx, sy])
+                    x, y, w, h = det['bbox']
+                    det['bbox'] = (int(x*sx), int(y*sy), int(w*sx), int(h*sy))
+                    det['cropped'] = self.detector._perspective_transform(frame, det['corners'])
+
+                    # Quick OCR on auto-detected card
+                    auto_id = self.identifier.identify(det['cropped'])
+                    auto_det = det
+
+                    with self._lock:
+                        self._auto_detection = det
+                        self._auto_result = {
+                            "name": auto_id["name"],
+                            "confidence": auto_id["confidence"],
+                            "card_number": auto_id["card_number"],
+                        }
+                elif self._frame_count % 30 == 0:
+                    # Clear stale auto-detect after a while
+                    with self._lock:
+                        self._auto_detection = None
+                        self._auto_result = None
+
+            # Draw auto-detect box if we have one
+            with self._lock:
+                ad = self._auto_detection
+                ar = self._auto_result
+            if ad is not None:
+                self.detector.draw_auto_detection(display, ad, ar)
+
+            # Draw guide frame (always visible)
+            has_auto = ad is not None
+            self.detector.draw_guide(display, active=has_auto)
 
             with self._lock:
                 self._display_frame = display
-                self._results = {
-                    'cards': cards_json,
-                    'fps': round(current_fps, 1),
-                }
 
-    def _analyze_frame(self, frame):
-        """Run detection, identification, and grading on a single frame."""
-        # Resize for faster processing
-        proc_frame = cv2.resize(frame, (config.PROCESS_WIDTH, config.PROCESS_HEIGHT))
-        scale_x = frame.shape[1] / config.PROCESS_WIDTH
-        scale_y = frame.shape[0] / config.PROCESS_HEIGHT
-
-        # Detect cards
-        detections = self.detector.detect(proc_frame)
-
-        # Scale detection coordinates back to original frame size
-        for det in detections:
-            det['corners'] = det['corners'] * np.array([scale_x, scale_y])
-            x, y, w, h = det['bbox']
-            det['bbox'] = (int(x * scale_x), int(y * scale_y),
-                           int(w * scale_x), int(h * scale_y))
-            # Re-crop from full resolution frame for better grading
-            det['cropped'] = self._crop_from_full(frame, det['corners'])
-
-        card_results = []
-        for det in detections:
-            cropped = det['cropped']
-            if cropped is None or cropped.size == 0:
-                continue
-
-            # Identify the card
-            id_result = self.identifier.identify(cropped)
-
-            # Grade the card's condition
-            grade_result = self.grader.grade(cropped)
-
-            card_results.append({
-                'name': id_result['name'],
-                'confidence': id_result['confidence'],
-                'matches': id_result['matches'],
-                'grade': grade_result['grade'],
-                'score': grade_result['score'],
-                'defects': grade_result['defects'],
-                'details': grade_result['details'],
-                'method': id_result.get('method', ''),
-                'raw_ocr': id_result.get('raw_ocr', ''),
-                'card_number': id_result.get('card_number', ''),
-            })
-
-        return detections, card_results
-
-    def _crop_from_full(self, frame, corners):
-        """Perspective-transform crop from the full-resolution frame."""
-        try:
-            corners = corners.astype(np.float32)
-            output_w, output_h = 300, 420
-
-            dst = np.array([
-                [0, 0], [output_w - 1, 0],
-                [output_w - 1, output_h - 1], [0, output_h - 1]
-            ], dtype=np.float32)
-
-            matrix = cv2.getPerspectiveTransform(corners, dst)
-            warped = cv2.warpPerspective(frame, matrix, (output_w, output_h))
-            return warped
-        except Exception:
-            return None
-
-
-# Need numpy for the scaling
-import numpy as np
+            time.sleep(0.01)  # ~30fps display
 
 
 def main():
     parser = argparse.ArgumentParser(description='Pokémon Card Grader')
-    parser.add_argument('--port', type=int, default=config.FLASK_PORT,
-                        help='Web UI port')
-    parser.add_argument('--width', type=int, default=config.CAMERA_WIDTH,
-                        help='Camera width')
-    parser.add_argument('--height', type=int, default=config.CAMERA_HEIGHT,
-                        help='Camera height')
-    parser.add_argument('--skip-frames', type=int, default=config.FRAME_SKIP,
-                        help='Process every Nth frame')
-    parser.add_argument('--demo', action='store_true',
-                        help='Run in demo mode without a real camera')
+    parser.add_argument('--port', type=int, default=config.FLASK_PORT)
+    parser.add_argument('--width', type=int, default=config.CAMERA_WIDTH)
+    parser.add_argument('--height', type=int, default=config.CAMERA_HEIGHT)
+    parser.add_argument('--no-auto', action='store_true',
+                        help='Disable auto-detection')
     args = parser.parse_args()
 
-    # Update config
     config.CAMERA_WIDTH = args.width
     config.CAMERA_HEIGHT = args.height
-    config.FRAME_SKIP = args.skip_frames
     config.FLASK_PORT = args.port
+    if args.no_auto:
+        config.AUTO_DETECT_ENABLED = False
 
-    # Initialize camera
-    if args.demo:
-        from camera import DemoCamera
-        camera = DemoCamera(args.width, args.height)
-    else:
-        from camera import Camera
-        camera = Camera(args.width, args.height)
-
-    # Build pipeline
-    pipeline = Pipeline(camera, frame_skip=args.skip_frames)
-
-    # Start processing
+    camera = Camera(args.width, args.height)
+    pipeline = Pipeline(camera)
     pipeline.start()
 
-    # Start web UI (blocking)
     ui = WebUI(pipeline)
     try:
         ui.run(port=args.port)
