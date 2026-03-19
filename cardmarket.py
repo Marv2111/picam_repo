@@ -13,9 +13,14 @@ class CardmarketLookup:
     SEARCH_URL = "https://www.cardmarket.com/en/Pokemon/Products/Search"
     BASE_URL = "https://www.cardmarket.com"
     HEADERS = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+        "Accept-Encoding": "identity",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
     }
 
     def __init__(self):

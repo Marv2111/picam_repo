@@ -118,7 +118,7 @@ class CardIdentifier:
         h, w = card.shape[:2]
 
         # Name region: top strip — wider and taller to be safe
-        region = card[int(h * 0.01):int(h * 0.16), int(w * 0.03):int(w * 0.80)]
+        region = card[int(h * 0.03):int(h * 0.22), int(w * 0.02):int(w * 0.85)]
 
         # Preprocess for OCR
         variants = self._preprocess(region)
@@ -131,21 +131,24 @@ class CardIdentifier:
         ocr_cfg = "--psm 7"
 
         for img in variants:
-            try:
-                text = pytesseract.image_to_string(img, config=ocr_cfg).strip()
-                print(f"[OCR name] raw: '{text}'")
-                if len(text) < 3:
+            for psm in ["--psm 7", "--psm 6", "--psm 8"]:
+                try:
+                    text = pytesseract.image_to_string(img, config=psm).strip()
+                    # Clean out numbers and junk
+                    text_clean = re.sub(r'[0-9/]', '', text).strip()
+                    print(f"[OCR name] psm={psm[-1]} raw='{text}' clean='{text_clean}'")
+                    if len(text_clean) < 3:
+                        continue
+
+                    name, conf = self._fuzzy_match(text_clean)
+                    if name:
+                        print(f"[OCR name] matched: {name} ({conf:.0%})")
+                    if name and conf > best_conf:
+                        best_name = name
+                        best_conf = conf
+                        best_raw = text_clean
+                except Exception:
                     continue
-
-                name, conf = self._fuzzy_match(text)
-                print(f"[OCR name] matched: {name} ({conf:.0%})")
-                if name and conf > best_conf:
-                    best_name = name
-                    best_conf = conf
-                    best_raw = text
-            except Exception:
-                continue
-
         return {"name": best_name, "confidence": best_conf, "raw_ocr": best_raw}
 
     # ------------------------------------------------------------------
@@ -157,7 +160,7 @@ class CardIdentifier:
             return ""
 
         h, w = card.shape[:2]
-        region = card[int(h * 0.91):int(h * 0.98), int(w * 0.02):int(w * 0.40)]
+        region = card[int(h * 0.85):int(h * 0.99), int(w * 0.01):int(w * 0.50)]
 
         variants = self._preprocess(region)
         ocr_cfg = "--psm 7 -c tessedit_char_whitelist=0123456789/"
