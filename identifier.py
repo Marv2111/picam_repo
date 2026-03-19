@@ -175,20 +175,59 @@ class CardIdentifier:
         h, w = card.shape[:2]
         region = card[int(h * 0.85):int(h * 0.99), int(w * 0.01):int(w * 0.50)]
 
-        variants = self._preprocess(region)
-        ocr_cfg = "--psm 7 -c tessedit_char_whitelist=0123456789/"
+        # Save debug
+        cv2.imwrite('static/debug_number.jpg', region)
 
-        for img in variants:
-            try:
-                text = pytesseract.image_to_string(img, config=ocr_cfg).strip()
-                match = re.search(r'(\d{1,4})\s*/\s*(\d{1,4})', text)
-                print(f"[OCR number] raw: '{text}'")
-                if match:
-                    result = f"{match.group(1)}/{match.group(2)}"
-                    print(f"[OCR number] found: {result}")
-                    return result
-            except Exception:
-                continue
+        # Scale up a LOT — small text needs to be big for Tesseract
+        rh, rw = region.shape[:2]
+        scale = max(5, 200 // max(rh, 1))
+        large = cv2.resize(region, (rw * scale, rh * scale), interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(large, cv2.COLOR_BGR2GRAY)
+
+        # Try multiple preprocessing + OCR combos
+        images = []
+
+        # Otsu
+        _, t1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        images.append(t1)
+        images.append(cv2.bitwise_not(t1))
+
+        # CLAHE + Otsu
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        _, t2 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        images.append(t2)
+        images.append(cv2.bitwise_not(t2))
+
+        # Adaptive
+        adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 21, 10)
+        images.append(adapt)
+        images.append(cv2.bitwise_not(adapt))
+
+        configs = [
+            "--psm 7",
+            "--psm 6",
+            "--psm 8",
+            "--psm 7 -c tessedit_char_whitelist=0123456789/",
+            "--psm 13",
+        ]
+
+        for img in images:
+            for cfg in configs:
+                try:
+                    text = pytesseract.image_to_string(img, config=cfg).strip()
+                    if text:
+                        print(f"[OCR num] cfg='{cfg}' -> '{text}'")
+                    match = re.search(r'(\d{1,4})\s*/\s*(\d{1,4})', text)
+                    if match:
+                        result = f"{match.group(1)}/{match.group(2)}"
+                        print(f"[OCR num] FOUND: {result}")
+                        return result
+                except Exception:
+                    continue
+
+        print("[OCR num] No number found in any variant")
         return ""
 
     # ------------------------------------------------------------------

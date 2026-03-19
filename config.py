@@ -8,7 +8,7 @@ PROCESS_HEIGHT = 480
 
 # --- Guide Frame (percentage of frame) ---
 # Card ratio: 63mm x 88mm = 0.716
-GUIDE_WIDTH_PCT = 0.65    # Guide box width as % of frame width
+GUIDE_WIDTH_PCT = 0.75    # Guide box width as % of frame width
 GUIDE_ASPECT = 0.716      # width/height ratio
 
 # --- Auto-detect ---
