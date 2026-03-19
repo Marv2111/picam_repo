@@ -11,9 +11,9 @@ PROCESS_HEIGHT = 480
 
 # --- Card Detection ---
 CARD_ASPECT_RATIO = 0.716          # Standard Pokémon card: 63mm / 88mm
-CARD_ASPECT_TOLERANCE = 0.12       # How far from ideal ratio is allowed
-CARD_MIN_AREA_RATIO = 0.02         # Min card area as fraction of frame area
-CARD_MAX_AREA_RATIO = 0.85         # Max card area as fraction of frame area
+CARD_ASPECT_TOLERANCE = 0.15       # How far from ideal ratio is allowed
+CARD_MIN_AREA_RATIO = 0.01         # Min card area as fraction of frame area
+CARD_MAX_AREA_RATIO = 0.90         # Max card area as fraction of frame area
 GAUSSIAN_BLUR_KERNEL = (5, 5)
 CANNY_LOW = 30
 CANNY_HIGH = 120
@@ -69,7 +69,7 @@ GRADE_THRESHOLDS = {
 FLASK_HOST = "0.0.0.0"
 FLASK_PORT = 5000
 JPEG_QUALITY = 80
-FRAME_SKIP = 3                     # Process every Nth frame (1 = every frame)
+FRAME_SKIP = 5                     # Process every Nth frame (1 = every frame)
 
 # --- Colors (BGR for OpenCV) ---
 COLOR_BOX = (0, 255, 0)
