@@ -122,40 +122,47 @@ class CardIdentifier:
             return {"name": "No OCR", "confidence": 0.0, "raw_ocr": ""}
 
         h, w = card.shape[:2]
-
-        # Name region: top strip — wider and taller to be safe
         region = card[int(h * 0.03):int(h * 0.22), int(w * 0.02):int(w * 0.85)]
 
-        # Preprocess for OCR
         variants = self._preprocess(region)
 
-        # Try OCR on each variant
         best_name = "Unknown"
         best_conf = 0.0
         best_raw = ""
-
-        ocr_cfg = "--psm 7"
+        all_reads = []
 
         for img in variants:
-            for psm in ["--psm 7", "--psm 6", "--psm 8"]:
+            for psm in ["--psm 7", "--psm 6", "--psm 8", "--psm 13"]:
                 try:
                     text = pytesseract.image_to_string(img, config=psm).strip()
-                    # Clean out numbers and junk
-                    text_clean = re.sub(r'[0-9/]', '', text).strip()
-                    print(f"[OCR name] psm={psm[-1]} raw='{text}' clean='{text_clean}'")
-                    if len(text_clean) < 3:
+                    if not text:
                         continue
 
-                    name, conf = self._fuzzy_match(text_clean)
-                    if name:
-                        print(f"[OCR name] matched: {name} ({conf:.0%})")
+                    # Clean: remove numbers, slashes, special chars
+                    text_alpha = re.sub(r'[^a-zA-Z.\' -]', '', text).strip()
+                    all_reads.append(f"{psm[-2:]}: '{text}' -> '{text_alpha}'")
+
+                    if len(text_alpha) < 3:
+                        continue
+
+                    name, conf = self._fuzzy_match(text_alpha)
                     if name and conf > best_conf:
                         best_name = name
                         best_conf = conf
-                        best_raw = text_clean
+                        best_raw = text_alpha
                 except Exception:
                     continue
-        return {"name": best_name, "confidence": best_conf, "raw_ocr": best_raw}
+
+        # Always log everything
+        print(f"[OCR name] All reads: {all_reads}")
+        print(f"[OCR name] Best: '{best_name}' ({best_conf:.0%}) raw='{best_raw}'")
+
+        # Return ALL raw reads so we can see them in the UI
+        return {
+            "name": best_name,
+            "confidence": best_conf,
+            "raw_ocr": best_raw if best_raw else " | ".join(all_reads[:4]),
+        }
 
     # ------------------------------------------------------------------
     # Card number reading
