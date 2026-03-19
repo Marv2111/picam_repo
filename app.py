@@ -60,8 +60,8 @@ class Pipeline:
     def scan_guide_frame(self):
         """
         Triggered by the Scan button.
-        Crops the guide frame region, runs OCR + grading.
-        Returns the result dict.
+        Captures the CURRENT frame, crops guide region, runs OCR + grading.
+        Also saves debug images.
         """
         frame = self.camera.get_frame()
         if frame is None:
@@ -70,10 +70,21 @@ class Pipeline:
         # Crop the guide region
         card_img = self.detector.crop_guide_region(frame)
 
-        # Step 1: Identify (OCR reads name + number)
+        # Save debug images to static/ so they're viewable in browser
+        import os
+        cv2.imwrite('static/debug_card.jpg', card_img)
+
+        h, w = card_img.shape[:2]
+        name_region = card_img[int(h*0.03):int(h*0.22), int(w*0.02):int(w*0.85)]
+        cv2.imwrite('static/debug_name.jpg', name_region)
+
+        num_region = card_img[int(h*0.85):int(h*0.99), int(w*0.01):int(w*0.50)]
+        cv2.imwrite('static/debug_number.jpg', num_region)
+
+        # Identify
         id_result = self.identifier.identify(card_img)
 
-        # Step 2: Grade condition
+        # Grade
         grade_result = self.grader.grade(card_img)
 
         result = {
@@ -85,13 +96,14 @@ class Pipeline:
             "score": grade_result["score"],
             "defects": grade_result["defects"],
             "details": grade_result["details"],
+            "debug": True,
         }
 
         with self._lock:
             self._scan_result = result
 
         return result
-
+    
     def _display_loop(self):
         """Continuously update the display frame with overlays."""
         while self._running:

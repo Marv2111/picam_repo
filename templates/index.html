@@ -133,6 +133,17 @@ function renderScan(d) {
             </div>
 
             <div id="priceBox"></div>
+
+            ${d.debug ? `
+            <div class="debug-section">
+                <h3>Debug: What the scanner sees</h3>
+                <div class="debug-images">
+                    <div><p>Full card crop:</p><img src="/static/debug_card.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
+                    <div><p>Name region:</p><img src="/static/debug_name.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
+                    <div><p>Number region:</p><img src="/static/debug_number.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
+                </div>
+            </div>
+            ` : ''}
         </div>`;
 }
 

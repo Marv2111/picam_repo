@@ -111,3 +111,8 @@ main { display:flex; gap:1.5rem; padding:1.5rem; max-width:1400px; margin:0 auto
     .video-panel,.results-panel { min-width:unset; flex:1 1 100%; }
     header { flex-direction:column; align-items:flex-start; }
 }
+.debug-section { margin-top:1rem; padding-top:1rem; border-top:1px solid #333; }
+.debug-section h3 { font-size:.8rem; color:#888; margin-bottom:.5rem; text-transform:uppercase; }
+.debug-images { display:flex; gap:.5rem; flex-wrap:wrap; }
+.debug-images > div { flex:1; min-width:80px; }
+.debug-images p { font-size:.7rem; color:#666; margin-bottom:.3rem; }
