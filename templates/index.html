@@ -11,7 +11,7 @@
         <h1>⚡ Pokémon Card Grader</h1>
         <nav class="tabs">
             <button class="tab active" onclick="showTab('scanner')">📷 Scanner</button>
-            <button class="tab" onclick="showTab('collection')">📦 Collection <span class="badge" id="colBadge">{{ col_count }}</span></button>
+            <button class="tab" onclick="showTab('collection')">📦 Collection <span class="badge" id="colBadge">0</span></button>
         </nav>
     </header>
 
@@ -24,7 +24,7 @@
             <button class="scan-btn" id="scanBtn" onclick="doScan()">
                 📷 SCAN CARD
             </button>
-            <p class="scan-hint">Align the card inside the yellow guide frame, then press Scan</p>
+            <p class="scan-hint">Align the card inside the guide frame, then press Scan</p>
         </section>
 
         <section class="results-panel" id="resultsPanel">
@@ -49,7 +49,6 @@
     </main>
 
 <script>
-/* === Tabs === */
 function showTab(t) {
     document.querySelectorAll('main').forEach(m => m.style.display = 'none');
     document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
@@ -58,7 +57,6 @@ function showTab(t) {
     if (t === 'collection') loadCollection();
 }
 
-/* === Grade helpers === */
 function gc(grade) {
     return {'Mint':'grade-mint','Near Mint':'grade-nm','Excellent':'grade-ex',
             'Good':'grade-good','Poor':'grade-poor'}[grade] || '';
@@ -134,7 +132,7 @@ function renderScan(d) {
 
             <div id="priceBox"></div>
 
-        ${d.debug ? `
+            ${d.debug ? `
             <div class="debug-section">
                 <h3>Debug: What the scanner sees</h3>
                 <div class="debug-ocr">
@@ -142,20 +140,20 @@ function renderScan(d) {
                     <p><b>Card number:</b> ${d.card_number || 'none'}</p>
                 </div>
                 <div class="debug-images">
-                    <div><p>Full card crop:</p><img src="/static/debug_card.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
-                    <div><p>Name region:</p><img src="/static/debug_name.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
-                    <div><p>Number region:</p><img src="/static/debug_number.jpg?t=${Date.now()}" style="width:100%;border-radius:4px;"></div>
+                    <div><p>Full card crop:</p><img src="/static/debug_card.jpg?t=${Date.now()}"></div>
+                    <div><p>Name region:</p><img src="/static/debug_name.jpg?t=${Date.now()}"></div>
+                    <div><p>Number region:</p><img src="/static/debug_number.jpg?t=${Date.now()}"></div>
                 </div>
             </div>
             ` : ''}
         </div>`;
 }
 
-/* === Price lookup === */
-async function lookupPrice() {
+/* === Price — opens Cardmarket in browser === */
+function lookupPrice() {
     if (!_lastScan) return;
     const box = document.getElementById('priceBox');
-    
+
     const q = _lastScan.name + (_lastScan.card_number ? ' ' + _lastScan.card_number : '');
     const url = 'https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=' + encodeURIComponent(q);
     _price = { found: true, url: url, price_avg: 'N/A', price_low: 'N/A', price_trend: 'N/A' };
@@ -163,7 +161,7 @@ async function lookupPrice() {
     box.innerHTML = `
         <div class="price-result">
             <div class="price-name">Search: ${q}</div>
-            <a href="${url}" target="_blank" class="btn btn-price" style="display:block;text-decoration:none;margin-top:.5rem;">
+            <a href="${url}" target="_blank" class="btn btn-price" style="display:block;text-decoration:none;margin-top:.5rem;text-align:center;">
                 🔗 Open on Cardmarket
             </a>
         </div>`;
@@ -206,25 +204,21 @@ async function saveCard() {
     }
 }
 
-/* === Auto-detect display === */
+/* === Auto-detect === */
 async function pollAuto() {
     try {
         const res = await fetch('/results');
         const data = await res.json();
         const el = document.getElementById('autoResult');
-
-        if (data.auto && data.auto.name && data.auto.name !== 'Unknown') {
+        if (data.auto && data.auto.name) {
             el.style.display = 'block';
-            el.innerHTML = `<span class="auto-tag">🔍 Auto-detect:</span> 
-                <b>${data.auto.name}</b>
-                ${data.auto.card_number ? ` [${data.auto.card_number}]` : ''}
-                <span class="auto-conf">${(data.auto.confidence * 100).toFixed(0)}%</span>`;
+            el.innerHTML = `<span class="auto-tag">🔍 Auto-detect:</span> <b>${data.auto.name}</b>`;
         } else {
             el.style.display = 'none';
         }
     } catch (e) {}
 }
-setInterval(pollAuto, 1000);
+setInterval(pollAuto, 2000);
 
 /* === Collection === */
 async function loadCollection() {
@@ -238,12 +232,12 @@ async function loadCollection() {
 
         if (data.cards.length === 0) {
             document.getElementById('colList').innerHTML =
-                '<p class="hint">No cards yet. Scan a card and click Save.</p>';
+                '<p class="hint">No cards yet. Scan and save one.</p>';
             return;
         }
 
         let h = '<table class="col-table"><thead><tr>'
-            + '<th>Name</th><th>#</th><th>Grade</th><th>Avg Price</th><th>Saved</th><th></th>'
+            + '<th>Name</th><th>#</th><th>Grade</th><th>Saved</th><th></th>'
             + '</tr></thead><tbody>';
 
         data.cards.forEach(c => {
@@ -251,7 +245,6 @@ async function loadCollection() {
                 <td><b>${c.name}</b></td>
                 <td>${c.card_number || '-'}</td>
                 <td><span class="pill ${gc(c.grade)}">${c.grade}</span></td>
-                <td>${c.price_avg || 'N/A'}</td>
                 <td class="date">${c.saved_at}</td>
                 <td>
                     ${c.cardmarket_url ? `<a href="${c.cardmarket_url}" target="_blank" class="cm-sm">CM</a>` : ''}
@@ -281,6 +274,7 @@ async function updateBadge() {
         document.getElementById('colBadge').textContent = d.cards.length;
     } catch(e) {}
 }
+updateBadge();
 </script>
 </body>
 </html>

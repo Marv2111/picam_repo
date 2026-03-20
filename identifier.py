@@ -1,6 +1,7 @@
 """
 Card identification via OCR.
 Reads the Pokémon name (top) and card number (bottom) from a cropped card image.
+Supports English and German names (Gen 1-6).
 """
 
 import re
@@ -15,59 +16,7 @@ except ImportError:
     print("[Identifier] WARNING: pytesseract not installed!")
     print("  sudo apt install tesseract-ocr && pip install pytesseract")
 
-# All Pokémon names Gen 1-2 for fuzzy matching
-POKEMON_NAMES = [
-    "Bulbasaur", "Ivysaur", "Venusaur", "Charmander", "Charmeleon",
-    "Charizard", "Squirtle", "Wartortle", "Blastoise", "Caterpie",
-    "Metapod", "Butterfree", "Weedle", "Kakuna", "Beedrill",
-    "Pidgey", "Pidgeotto", "Pidgeot", "Rattata", "Raticate",
-    "Spearow", "Fearow", "Ekans", "Arbok", "Pikachu",
-    "Raichu", "Sandshrew", "Sandslash", "Nidoran", "Nidorina",
-    "Nidoqueen", "Nidorino", "Nidoking", "Clefairy", "Clefable",
-    "Vulpix", "Ninetales", "Jigglypuff", "Wigglytuff", "Zubat",
-    "Golbat", "Oddish", "Gloom", "Vileplume", "Paras",
-    "Parasect", "Venonat", "Venomoth", "Diglett", "Dugtrio",
-    "Meowth", "Persian", "Psyduck", "Golduck", "Mankey",
-    "Primeape", "Growlithe", "Arcanine", "Poliwag", "Poliwhirl",
-    "Poliwrath", "Abra", "Kadabra", "Alakazam", "Machop",
-    "Machoke", "Machamp", "Bellsprout", "Weepinbell", "Victreebel",
-    "Tentacool", "Tentacruel", "Geodude", "Graveler", "Golem",
-    "Ponyta", "Rapidash", "Slowpoke", "Slowbro", "Magnemite",
-    "Magneton", "Farfetchd", "Doduo", "Dodrio", "Seel",
-    "Dewgong", "Grimer", "Muk", "Shellder", "Cloyster",
-    "Gastly", "Haunter", "Gengar", "Onix", "Drowzee",
-    "Hypno", "Krabby", "Kingler", "Voltorb", "Electrode",
-    "Exeggcute", "Exeggutor", "Cubone", "Marowak", "Hitmonlee",
-    "Hitmonchan", "Lickitung", "Koffing", "Weezing", "Rhyhorn",
-    "Rhydon", "Chansey", "Tangela", "Kangaskhan", "Horsea",
-    "Seadra", "Goldeen", "Seaking", "Staryu", "Starmie",
-    "Mr. Mime", "Scyther", "Jynx", "Electabuzz", "Magmar",
-    "Pinsir", "Tauros", "Magikarp", "Gyarados", "Lapras",
-    "Ditto", "Eevee", "Vaporeon", "Jolteon", "Flareon",
-    "Porygon", "Omanyte", "Omastar", "Kabuto", "Kabutops",
-    "Aerodactyl", "Snorlax", "Articuno", "Zapdos", "Moltres",
-    "Dratini", "Dragonair", "Dragonite", "Mewtwo", "Mew",
-    "Chikorita", "Bayleef", "Meganium", "Cyndaquil", "Quilava",
-    "Typhlosion", "Totodile", "Croconaw", "Feraligatr", "Sentret",
-    "Furret", "Hoothoot", "Noctowl", "Ledyba", "Ledian",
-    "Spinarak", "Ariados", "Crobat", "Chinchou", "Lanturn",
-    "Pichu", "Cleffa", "Igglybuff", "Togepi", "Togetic",
-    "Natu", "Xatu", "Mareep", "Flaaffy", "Ampharos",
-    "Bellossom", "Marill", "Azumarill", "Sudowoodo", "Politoed",
-    "Hoppip", "Skiploom", "Jumpluff", "Aipom", "Sunkern",
-    "Sunflora", "Yanma", "Wooper", "Quagsire", "Espeon",
-    "Umbreon", "Murkrow", "Slowking", "Misdreavus", "Unown",
-    "Wobbuffet", "Girafarig", "Pineco", "Forretress", "Dunsparce",
-    "Gligar", "Steelix", "Snubbull", "Granbull", "Qwilfish",
-    "Scizor", "Shuckle", "Heracross", "Sneasel", "Teddiursa",
-    "Ursaring", "Slugma", "Magcargo", "Swinub", "Piloswine",
-    "Corsola", "Remoraid", "Octillery", "Delibird", "Mantine",
-    "Skarmory", "Houndour", "Houndoom", "Kingdra", "Phanpy",
-    "Donphan", "Porygon2", "Stantler", "Smeargle", "Tyrogue",
-    "Hitmontop", "Smoochum", "Elekid", "Magby", "Miltank",
-    "Blissey", "Raikou", "Entei", "Suicune", "Larvitar",
-    "Pupitar", "Tyranitar", "Lugia", "Ho-Oh", "Celebi",
-]
+from pokemon_names import POKEMON_ALL, ALL_NAMES, NAME_TO_ENGLISH, ENGLISH_NAMES
 
 CARD_SUFFIXES = ["EX", "GX", "V", "VMAX", "VSTAR", "ex", "BREAK"]
 
@@ -76,16 +25,15 @@ class CardIdentifier:
     """Identify Pokémon cards via OCR."""
 
     def __init__(self):
-        # Build fuzzy lookup
-        self.lookup = {}
-        for name in POKEMON_NAMES:
-            self.lookup[name.lower()] = name
-            clean = re.sub(r'[^a-z]', '', name.lower())
-            self.lookup[clean] = name
-        print(f"[Identifier] {len(POKEMON_NAMES)} Pokémon names loaded, "
+        self.lookup = NAME_TO_ENGLISH
+        print(f"[Identifier] {len(POKEMON_ALL)} Pokémon loaded (EN+DE), "
               f"OCR {'available' if TESSERACT_AVAILABLE else 'NOT available'}")
 
     def identify(self, card_image):
+        """
+        Read name and card number from a cropped card image.
+        Tries both orientations in case card is upside down.
+        """
         card = cv2.resize(card_image, (300, 420))
 
         # Try normal orientation
@@ -103,7 +51,7 @@ class CardIdentifier:
                 card_number = flip_number
 
         # Save debug image on each scan
-        cv2.imwrite('debug_last_scan.jpg', card)
+        cv2.imwrite('static/debug_card.jpg', card)
         print(f"[Scan] Final: name='{name_result['name']}' number='{card_number}'")
 
         return {
@@ -124,6 +72,7 @@ class CardIdentifier:
         h, w = card.shape[:2]
         region = card[int(h * 0.03):int(h * 0.22), int(w * 0.02):int(w * 0.85)]
 
+        cv2.imwrite('static/debug_name.jpg', region)
         variants = self._preprocess(region)
 
         best_name = "Unknown"
@@ -138,7 +87,6 @@ class CardIdentifier:
                     if not text:
                         continue
 
-                    # Clean: remove numbers, slashes, special chars
                     text_alpha = re.sub(r'[^a-zA-Z.\' -]', '', text).strip()
                     all_reads.append(f"{psm[-2:]}: '{text}' -> '{text_alpha}'")
 
@@ -146,6 +94,8 @@ class CardIdentifier:
                         continue
 
                     name, conf = self._fuzzy_match(text_alpha)
+                    if name:
+                        print(f"[OCR name] matched: {name} ({conf:.0%})")
                     if name and conf > best_conf:
                         best_name = name
                         best_conf = conf
@@ -153,11 +103,9 @@ class CardIdentifier:
                 except Exception:
                     continue
 
-        # Always log everything
         print(f"[OCR name] All reads: {all_reads}")
         print(f"[OCR name] Best: '{best_name}' ({best_conf:.0%}) raw='{best_raw}'")
 
-        # Return ALL raw reads so we can see them in the UI
         return {
             "name": best_name,
             "confidence": best_conf,
@@ -174,38 +122,41 @@ class CardIdentifier:
 
         h, w = card.shape[:2]
 
-        # Try different bottom strips
         strips = [
             card[int(h * 0.88):int(h * 0.96), int(w * 0.01):int(w * 0.55)],
             card[int(h * 0.85):int(h * 0.99), int(w * 0.01):int(w * 0.55)],
             card[int(h * 0.90):int(h * 0.99), int(w * 0.01):int(w * 0.55)],
         ]
 
+        # Save debug of first strip
+        cv2.imwrite('static/debug_number.jpg', strips[0])
+
         for region in strips:
             rh, rw = region.shape[:2]
             if rh < 3 or rw < 10:
                 continue
 
-            # Scale up a lot
             scale = max(6, 250 // max(rh, 1))
-            large = cv2.resize(region, (rw * scale, rh * scale), interpolation=cv2.INTER_CUBIC)
+            large = cv2.resize(region, (rw * scale, rh * scale),
+                               interpolation=cv2.INTER_CUBIC)
             gray = cv2.cvtColor(large, cv2.COLOR_BGR2GRAY)
 
-            # Preprocess
             images = []
             _, t1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             images += [t1, cv2.bitwise_not(t1)]
             clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-            _, t2 = cv2.threshold(clahe.apply(gray), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            _, t2 = cv2.threshold(clahe.apply(gray), 0, 255,
+                                   cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             images += [t2, cv2.bitwise_not(t2)]
 
-            # NO whitelist — read everything, then search for pattern
+            # No whitelist — read everything, then search for pattern
             for img in images:
                 for psm in ["--psm 6", "--psm 7", "--psm 4", "--psm 3"]:
                     try:
                         text = pytesseract.image_to_string(img, config=psm)
                         text = text.replace('\\', '/').replace('|', '/').replace('l', '1').replace('O', '0').replace('o', '0')
-                        print(f"[OCR num] '{text.strip()}'")
+                        if text.strip():
+                            print(f"[OCR num] '{text.strip()}'")
                         match = re.search(r'(\d{1,4})\s*/\s*(\d{1,4})', text)
                         if match:
                             result = f"{match.group(1)}/{match.group(2)}"
@@ -221,31 +172,25 @@ class CardIdentifier:
     # Image preprocessing for OCR
     # ------------------------------------------------------------------
     def _preprocess(self, region):
-        """Create multiple preprocessed versions for OCR."""
         h, w = region.shape[:2]
         if h < 5 or w < 10:
             return []
 
-        # Scale up (Tesseract needs ~30px font height minimum)
         scale = max(3, 100 // max(h, 1))
         large = cv2.resize(region, (w * scale, h * scale),
                            interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(large, cv2.COLOR_BGR2GRAY)
 
         results = []
-
-        # Otsu threshold
         _, t1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         results.append(t1)
         results.append(cv2.bitwise_not(t1))
 
-        # CLAHE + Otsu
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
         _, t2 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         results.append(t2)
 
-        # Adaptive threshold
         adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                        cv2.THRESH_BINARY, 21, 10)
         results.append(adapt)
@@ -256,7 +201,7 @@ class CardIdentifier:
     # Fuzzy matching
     # ------------------------------------------------------------------
     def _fuzzy_match(self, ocr_text):
-        """Match OCR text against known Pokémon names."""
+        """Match OCR text against known Pokémon names (EN + DE)."""
         text = ocr_text.strip()
         for suffix in CARD_SUFFIXES:
             text = text.replace(suffix, "").strip()
@@ -268,36 +213,54 @@ class CardIdentifier:
         text_lower = text.lower()
         text_clean = re.sub(r'[^a-z]', '', text_lower)
 
-        # Exact
+        # Exact match
         if text_lower in self.lookup:
             return self.lookup[text_lower], 0.95
         if text_clean in self.lookup:
             return self.lookup[text_clean], 0.93
 
-        # Prefix match
-        for key, name in self.lookup.items():
-            if len(key) >= 4:
-                if text_clean.startswith(key):
-                    return name, 0.88
-                if key.startswith(text_clean) and len(text_clean) >= 4:
-                    return name, 0.85
+        # Substring: check if any Pokémon name is inside the OCR text
+        for name in ALL_NAMES:
+            name_lower = name.lower()
+            name_clean = re.sub(r'[^a-z]', '', name_lower)
+            if len(name_clean) >= 4 and name_clean in text_clean:
+                en_name = self.lookup.get(name_lower, name)
+                print(f"[Match] Found '{name}' inside '{text}'")
+                return en_name, 0.90
 
-        # Edit distance
+        # Reverse: check if OCR text is inside a Pokémon name
+        if len(text_clean) >= 4:
+            for name in ALL_NAMES:
+                name_clean = re.sub(r'[^a-z]', '', name.lower())
+                if text_clean in name_clean:
+                    en_name = self.lookup.get(name.lower(), name)
+                    return en_name, 0.80
+
+        # Word-by-word: try each word separately
+        words = text.split()
+        for word in words:
+            word_clean = re.sub(r'[^a-z]', '', word.lower())
+            if len(word_clean) >= 4 and word_clean in self.lookup:
+                return self.lookup[word_clean], 0.88
+
+        # Edit distance as last resort
         best_name, best_dist = None, 999
-        for key, name in self.lookup.items():
-            if abs(len(key) - len(text_clean)) > 3:
+        for word in words:
+            word_clean = re.sub(r'[^a-z]', '', word.lower())
+            if len(word_clean) < 3:
                 continue
-            d = self._edit_dist(text_clean, key)
-            if d < best_dist:
-                best_dist = d
-                best_name = name
+            for key, name in self.lookup.items():
+                if abs(len(key) - len(word_clean)) > 2:
+                    continue
+                d = self._edit_dist(word_clean, key)
+                if d < best_dist:
+                    best_dist = d
+                    best_name = name
 
-        if best_dist <= 1 and len(text_clean) >= 4:
-            return best_name, 0.85
-        if best_dist <= 2 and len(text_clean) >= 5:
-            return best_name, 0.70
-        if best_dist <= 3 and len(text_clean) >= 6:
-            return best_name, 0.55
+        if best_dist <= 1 and best_name:
+            return best_name, 0.80
+        if best_dist <= 2 and best_name:
+            return best_name, 0.65
         return None, 0.0
 
     def _edit_dist(self, s1, s2):
@@ -314,4 +277,4 @@ class CardIdentifier:
         return prev[-1]
 
     def get_card_count(self):
-        return len(POKEMON_NAMES)
+        return len(POKEMON_ALL)

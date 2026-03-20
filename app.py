@@ -29,9 +29,9 @@ class Pipeline:
 
         self._lock = threading.Lock()
         self._display_frame = None
-        self._scan_result = None        # Latest scan result
-        self._auto_result = None        # Latest auto-detect result
-        self._auto_detection = None     # Auto-detect box for overlay
+        self._scan_result = None
+        self._auto_result = None
+        self._auto_detection = None
         self._running = False
         self._frame_count = 0
 
@@ -50,7 +50,6 @@ class Pipeline:
             return self._display_frame
 
     def get_results(self):
-        """Return current state for the UI."""
         with self._lock:
             return {
                 "scan": self._scan_result,
@@ -71,7 +70,6 @@ class Pipeline:
         card_img = self.detector.crop_guide_region(frame)
 
         # Save debug images to static/ so they're viewable in browser
-        import os
         cv2.imwrite('static/debug_card.jpg', card_img)
 
         h, w = card_img.shape[:2]
@@ -103,7 +101,7 @@ class Pipeline:
             self._scan_result = result
 
         return result
-    
+
     def _display_loop(self):
         """Continuously update the display frame with overlays."""
         while self._running:
@@ -115,16 +113,14 @@ class Pipeline:
             display = frame.copy()
             self._frame_count += 1
 
-            # Run auto-detect every 10 frames (low CPU cost)
+            # Run auto-detect every 30 frames
             auto_det = None
-            if config.AUTO_DETECT_ENABLED and self._frame_count % 10 == 0:
+            if config.AUTO_DETECT_ENABLED and self._frame_count % 30 == 0:
                 try:
-                    # Run on smaller image for speed
                     small = cv2.resize(frame, (config.PROCESS_WIDTH, config.PROCESS_HEIGHT))
                     det = self.detector.auto_detect(small)
 
                     if det is not None:
-                        # Scale corners back to full resolution
                         sx = frame.shape[1] / config.PROCESS_WIDTH
                         sy = frame.shape[0] / config.PROCESS_HEIGHT
                         scaled_corners = (det['corners'] * np.array([sx, sy], dtype=np.float32)).astype(np.float32)
@@ -133,9 +129,7 @@ class Pipeline:
                         det['bbox'] = (int(x*sx), int(y*sy), int(w*sx), int(h*sy))
                         det['cropped'] = self.detector._perspective_transform(frame, scaled_corners)
 
-                        # Quick OCR on auto-detected card
                         auto_det = det
-
                         with self._lock:
                             self._auto_detection = det
                             self._auto_result = {
@@ -144,10 +138,10 @@ class Pipeline:
                                 "card_number": "",
                             }
                 except Exception as e:
-                    pass  # Auto-detect is a bonus, don't crash on errors
+                    pass  # Auto-detect is a bonus, don't crash
 
             # Clear stale auto-detect periodically
-            if config.AUTO_DETECT_ENABLED and self._frame_count % 30 == 0 and auto_det is None:
+            if config.AUTO_DETECT_ENABLED and self._frame_count % 90 == 0 and auto_det is None:
                 with self._lock:
                     self._auto_detection = None
                     self._auto_result = None
@@ -166,7 +160,7 @@ class Pipeline:
             with self._lock:
                 self._display_frame = display
 
-            time.sleep(0.01)  # ~30fps display
+            time.sleep(0.01)
 
 
 def main():
